@@ -23,10 +23,10 @@
   const IMG = 1000;
   const MID = IMG / 2;
   const CLOTH = 820;
-  // Bundled thin variable font (fonts/), so strokes are thread-thin on every device.
+  // Bundled variable font (fonts/), so the letters look the same on every device.
   const FONT = '"Loom Thread", "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif';
   const MASK_RES = 2; // mask pixels per (unstretched) image unit
-  const MAX_STRETCH = 24;
+  const MAX_STRETCH = 40;
 
   const SUITS = {
     S: { name: 'SPADES', sym: '♠' },
@@ -61,8 +61,9 @@
     phraseA: 'YOU WILL PICK',
     phraseB: 'THE {value} OF {suit}',
     edgeA: 'bottom',
-    edgeB: 'right',
-    valueStyle: 'digits',
+    edgeB: 'left',
+    valueStyle: 'words',
+    letterCase: 'sentence',
     suitOrder: 'CHSD',
     pinchStep: 1.22,
     gestureLock: true,
@@ -70,16 +71,16 @@
     haptics: true,
     indicator: 'card',
     startCard: 'random',
-    stretch: 8,
+    stretch: 17,
     pitch: 6,
     density: 1,
     layout: 'overlap',
     letters: 'solid',
-    weight: 250,
+    weight: 400,
     theme: 'linen',
     holdOrientation: true,
   };
-  const STORE_KEY = 'loom.settings.v3';
+  const STORE_KEY = 'loom.settings.v4';
 
   // ---------------------------------------------------------------- utils
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -148,6 +149,13 @@
     return S.phraseB
       .replace(/\{value\}/gi, v)
       .replace(/\{suit\}/gi, SUITS[c.suitKey].name);
+  }
+  /** Lowercase letters stretch into loops and loose ends; capitals into obvious bars. */
+  function applyCase(text, first) {
+    if (S.letterCase === 'upper') return text.toUpperCase();
+    const low = text.toLowerCase();
+    if (S.letterCase === 'sentence' && first) return low.replace(/[a-z]/, (ch) => ch.toUpperCase());
+    return low;
   }
 
   // ---------------------------------------------------------------- weave
@@ -232,7 +240,7 @@
   const mctx = maskCanvas.getContext('2d', { willReadFrequently: true });
 
   function lineCandidates(text) {
-    const t = text.toUpperCase().replace(/[ \t]+/g, ' ').trim();
+    const t = text.replace(/[ \t]+/g, ' ').trim();
     if (!t) return [];
     if (/[|\n]/.test(t)) return [t.split(/\s*[|\n]\s*/).filter(Boolean)];
     const words = t.split(' ');
@@ -271,6 +279,53 @@
   }
 
   /**
+   * Lay a phrase out the way the classic tilt-to-read images are built:
+   * small, normal-weight, mostly lowercase type, stretched `S.stretch`× along
+   * the reading axis only. The size is chosen so the stretched x-height band
+   * fills ~80% of the box: the bodies of the letters form the dense block,
+   * ascenders and descenders hang out of it as loose threads. Where a curved
+   * stroke turns horizontal (tops of n, o, e, a…) the stretch makes it S×
+   * thicker, which gives the fat tapered spikes at the top and bottom.
+   */
+  function layoutSolid(text, budgetW, budgetL) {
+    const t = text.replace(/[ \t]+/g, ' ').trim();
+    if (!t) return null;
+    const lines = t.split(/\s*[|\n]\s*/).filter(Boolean);
+    const n = lines.length;
+    mctx.font = `${S.weight} 100px ${FONT}`;
+    const xh = (mctx.measureText('x').actualBoundingBoxAscent || 52) / 100; // of the em
+    const lineGap = 0.8;                       // gap between lines, in x-heights
+    const band = budgetL * 0.8;                // stretched length of all x-height bands
+    const bandLine = band / (n + (n - 1) * lineGap);
+    const adv = lines.map((ln) => [...ln].map((ch) => mctx.measureText(ch).width / 100));
+    const natW = Math.max(...adv.map((a) => a.reduce((x, v) => x + v, 0)));
+    let em = bandLine / (S.stretch * xh);
+    if (natW * em > budgetW) em = budgetW / natW; // long phrase: smaller type, more stretch
+    const St = Math.min(MAX_STRETCH, bandLine / (xh * em));
+    const xhU = (bandLine / St);               // x-height in unstretched units
+    const pitch = xhU * (1 + lineGap);
+    const total = n * xhU + (n - 1) * xhU * lineGap;
+    let textW = 0;
+    const out = lines.map((ln, i) => {
+      const chars = [...ln];
+      const w = adv[i].reduce((x, v) => x + v, 0) * em;
+      // short phrases: open the letter-spacing a little so the block is not a sliver
+      const track = chars.length > 1
+        ? clamp((budgetW * 0.85 - w) / (chars.length - 1), 0, 0.1 * em) : 0;
+      const full = w + track * (chars.length - 1);
+      textW = Math.max(textW, full);
+      let x = -full / 2;
+      const placed = chars.map((ch, ci) => {
+        const o = { ch, x };
+        x += adv[i][ci] * em + track;
+        return o;
+      });
+      return { chars: placed.filter((o) => o.ch !== ' '), y: -total / 2 + i * pitch + xhU };
+    });
+    return { lines: out, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
+  }
+
+  /**
    * Weave `text` so it can be read from `edgeName`; c is the band centre in
    * image units.
    *  – 'solid' letters: the real glyphs, stretched S× along the reading axis
@@ -280,6 +335,12 @@
    */
   function weaveText(path, glyphs, text, edgeName, c, budgetW, budgetL) {
     const edge = EDGES[edgeName];
+    if (S.letters !== 'threads') {
+      const g = layoutSolid(text, budgetW, budgetL);
+      if (!g) return null;
+      glyphs.push({ lines: g.lines, font: g.font, St: g.St, ox: c[0], oy: c[1], U: edge.U, R: edge.R });
+      return { textW: g.textW, bandLen: g.bandLen, lines: g.text, count: 0, St: g.St, edge: edgeName };
+    }
     const p = S.pitch;
     const w = p * 0.6;
     const f = fitText(text, budgetW, budgetL, S.stretch, MAX_STRETCH);
@@ -289,16 +350,6 @@
     const k = f.k;
     const textW = f.maxW * k;    // along R, image units
     const bandH = f.total * k;   // along U, unstretched units
-
-    if (S.letters !== 'threads') {
-      glyphs.push({
-        lines: f.lines,
-        font: `${S.weight} ${100 * k}px ${FONT}`,
-        asc: f.asc * k, lineH: f.lineH * k, gap: f.gap * k, total: bandH,
-        ox: c[0], oy: c[1], U: edge.U, R: edge.R, St,
-      });
-      return { textW, bandLen: bandH * St, lines: f.lines, count: 0, St, edge: edgeName };
-    }
     const pad = 4;
     const mw = Math.ceil(textW * MASK_RES) + pad * 2;
     const mh = Math.ceil(bandH * MASK_RES) + pad * 2;
@@ -363,8 +414,8 @@
     const vPath = new Path2D(); // warp (vertical threads)
     const hPath = new Path2D(); // weft (horizontal threads)
     const msgs = [
-      { text: S.phraseA, edge: S.edgeA },
-      { text: cardPhrase(card), edge: S.edgeB },
+      { text: applyCase(S.phraseA, true), edge: S.edgeA },
+      { text: applyCase(cardPhrase(card), false), edge: S.edgeB },
     ];
     const same = axisOf(msgs[0].edge) === axisOf(msgs[1].edge);
     const j = weave.jitter;
@@ -520,17 +571,18 @@
         // local x → reading direction R; local y (down the glyph) → −U, ×St
         c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
         c.font = g.font;
-        c.textAlign = 'center';
+        c.textAlign = 'left';
         c.textBaseline = 'alphabetic';
         c.lineJoin = 'round';
-        c.lineWidth = pad * 1.6;
+        c.lineWidth = pad * 0.9;
         c.strokeStyle = theme.bg;
         c.fillStyle = theme.ink;
-        g.lines.forEach((ln, i) => {
-          const y = -g.total / 2 + i * (g.lineH + g.gap) + g.asc;
-          if (pass === 'halo') c.strokeText(ln, 0, y);
-          else c.fillText(ln, 0, y);
-        });
+        for (const ln of g.lines) {
+          for (const o of ln.chars) {
+            if (pass === 'halo') c.strokeText(o.ch, o.x, ln.y);
+            else c.fillText(o.ch, o.x, ln.y);
+          }
+        }
         c.restore();
       }
     }
@@ -882,7 +934,7 @@
     updateOutputs();
   }
   function updateOutputs() {
-    form.elements.stretchOut.value = `at least ${(+S.stretch).toFixed(1)}×`;
+    form.elements.stretchOut.value = `${(+S.stretch).toFixed(0)}× · view at ~${(Math.asin(1 / S.stretch) * 180 / Math.PI).toFixed(1)}°`;
     form.elements.pitchOut.value = (+S.pitch).toFixed(1);
     form.elements.densityOut.value = `${Math.round(S.density * 100)}%`;
     form.elements.weightOut.value = `${Math.round(S.weight)}`;

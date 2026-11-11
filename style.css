@@ -1,6 +1,6 @@
 @font-face {
   font-family: "Loom Thread";
-  src: url("fonts/roboto-condensed-latin-wght-normal.woff2") format("woff2");
+  src: url("fonts/roboto-latin-wght-normal.woff2") format("woff2");
   font-weight: 100 900;
   font-style: normal;
   font-display: block;
@@ -188,7 +188,7 @@ fieldset input:not([type]), fieldset select {
   background: var(--bg);
   color: var(--ink);
 }
-fieldset input:not([type]) { text-transform: uppercase; letter-spacing: 0.04em; }
+fieldset input:not([type]) { letter-spacing: 0.02em; }
 fieldset input[type="range"] { display: block; width: 100%; margin-top: 6px; accent-color: var(--ink); }
 fieldset input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--ink); }
 output { float: right; font-variant-numeric: tabular-nums; color: var(--muted); }
