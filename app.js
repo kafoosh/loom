@@ -3,7 +3,7 @@
  *
  * The picture is two phrases drawn on a 1000 × 1000 unit canvas, built the
  * way classic tilt-to-read images are:
- *   – Each phrase is small, light, mostly lowercase type, stretched ~17× along
+ *   – Each phrase is small, light, mostly lowercase type, stretched ~24× along
  *     one axis only (phrase 1 vertically, phrase 2 horizontally) and laid over
  *     the other. Viewed at a grazing angle along that axis, foreshortening
  *     squashes it back into letters.
@@ -70,7 +70,7 @@
     haptics: true,
     indicator: 'card',
     startCard: 'random',
-    stretch: 17,
+    stretch: 24,
     density: 1,
     layout: 'overlap',
     weight: 300,
@@ -107,6 +107,8 @@
         if (/^you will pick$/i.test((saved.phraseA || '').trim())) delete saved.phraseA;
         // settings saved before all-lowercase became the default pick it up once
         if (!(saved.rev >= 2)) delete saved.letterCase;
+        // …and the stronger default stretch
+        if (!(saved.rev >= 3)) delete saved.stretch;
         delete saved.rev;
         return { ...DEFAULTS, ...saved };
       }
@@ -114,7 +116,7 @@
     return { ...DEFAULTS };
   }
   function saveSettings() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 2 })); } catch (_) { /* ignore */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 3 })); } catch (_) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- state
@@ -225,9 +227,10 @@
   /**
    * Lay a phrase out the way the classic tilt-to-read images are built:
    * small, normal-weight, mostly lowercase type, stretched `S.stretch`× along
-   * the reading axis only. The size is chosen so the stretched x-height band
-   * fills ~80% of the box: the bodies of the letters form the dense block,
-   * ascenders and descenders hang out of it as loose threads. Where a curved
+   * the reading axis only. The letter size comes from the width the phrase
+   * fills (`budgetW`); the stretch then sets how long the block is, up to
+   * `maxBand`. The bodies of the letters form the dense block, ascenders
+   * and descenders hang out of it as loose threads. Where a curved
    * stroke turns horizontal (tops of n, o, e, a…) the stretch makes it S×
    * thicker, which gives the fat tapered spikes at the top and bottom.
    *
@@ -236,7 +239,7 @@
    * `extras`, a Path2D (in the phrase's own unstretched coordinates) holding
    * those run-on stems and the redrawn k's.
    */
-  function layoutSolid(text, budgetW, budgetL, rnd, bandFrac) {
+  function layoutSolid(text, budgetW, maxBand, rnd, sizeJitter) {
     const t = text.replace(/[ \t]+/g, ' ').trim();
     if (!t) return null;
     const lines = t.split(/\s*[|\n]\s*/).filter(Boolean);
@@ -247,14 +250,17 @@
     const kRight = {};
     for (const ch of 'kK') kRight[ch] = (mctx.measureText(ch).actualBoundingBoxRight || 50) / 100;
     const lineGap = 0.8;                       // gap between lines, in x-heights
-    const band = budgetL * bandFrac;           // stretched length of all x-height bands
-    const bandLine = band / (n + (n - 1) * lineGap);
+    const lineUnits = n + (n - 1) * lineGap;
     const adv = lines.map((ln) => [...ln].map((ch) => mctx.measureText(ch).width / 100));
     const natW = Math.max(...adv.map((a) => a.reduce((x, v) => x + v, 0)));
-    let em = bandLine / (S.stretch * xh);
-    if (natW * em > budgetW) em = budgetW / natW; // long phrase: smaller type, more stretch
-    const St = Math.min(MAX_STRETCH, bandLine / (xh * em));
-    const xhU = (bandLine / St);               // x-height in unstretched units
+    // The letter size comes from the width the phrase has to fill. The stretch
+    // then sets how long the block is: more stretch = longer words, same
+    // letter width. Only when the block would not fit does the type shrink.
+    const St = Math.min(MAX_STRETCH, S.stretch);
+    let em = (budgetW / natW) * sizeJitter;
+    if (St * xh * em * lineUnits > maxBand) em = maxBand / (St * xh * lineUnits);
+    const bandLine = St * xh * em;             // stretched x-height of one line
+    const xhU = xh * em;                       // x-height in unstretched units
     const pitch = xhU * (1 + lineGap);
     const total = n * xhU + (n - 1) * xhU * lineGap;
 
@@ -278,18 +284,18 @@
     // how far a run-on stem goes, in stretched units
     const runLength = () => {
       const v = rnd();
-      if (v < 0.4) return bandLine * (0.04 + rnd() * 0.22);
-      if (v < 0.82) return bandLine * (0.26 + rnd() * 0.5);
-      return bandLine * (0.9 + rnd() * 1.1); // a few run right off the cloth
+      if (v < 0.4) return budgetW * (0.04 + rnd() * 0.22);
+      if (v < 0.82) return budgetW * (0.26 + rnd() * 0.5);
+      return budgetW * (0.9 + rnd() * 1.1); // a few run right off the cloth
     };
 
     let textW = 0;
     const out = lines.map((ln, i) => {
       const chars = [...ln];
       const w = adv[i].reduce((x, v) => x + v, 0) * em;
-      // short phrases: open the letter-spacing a little so the block is not a sliver
+      // only a touch of extra letter-spacing: tight letters hide the words better
       const track = chars.length > 1
-        ? clamp((budgetW * 0.97 - w) / (chars.length - 1), 0, 0.13 * em) : 0;
+        ? clamp((budgetW * 0.97 - w) / (chars.length - 1), 0, 0.05 * em) : 0;
       const full = w + track * (chars.length - 1);
       textW = Math.max(textW, full);
       const base = -total / 2 + i * pitch + xhU;   // baseline (y grows downwards)
@@ -372,15 +378,20 @@
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
         const s = i === 0 ? off : -off;
-        return { c: at([s * A.U[0], s * A.U[1]], j.u * 10, j.r * 8, e), bw: ext(e.R) * 0.9, bl };
+        return { c: at([s * A.U[0], s * A.U[1]], j.u * 10, j.r * 8, e), bw: ext(e.R) * 0.9, mb: bl * 0.8 };
       });
     } else if (S.layout === 'overlap') {
-      // Classic look: both phrases fill the same square and cross in it, so
-      // the stems of one run the full length of the other.
+      // Classic look: the two phrases cross in the centre. Each is set to the
+      // same width and then stretched along its own axis as far as the
+      // stretch setting says, up to what the screen can show.
       const side = Math.min(ext(A.U), ext(A.R)) * 0.72;
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
-        return { c: at([0, 0], j.u * 22 * (i ? -1 : 1), j.r * 16, e), bw: side, bl: side, bf: 0.9 };
+        // Across the screen there is less room: the ascenders and descenders
+        // (about 0.4 of the block each side) must mostly stay on screen, or an
+        // h reads as an n. Down the screen there is plenty.
+        const room = Math.abs(e.U[0]) > 0.5 ? view.visW * 0.676 : view.visH * 0.56;
+        return { c: at([0, 0], j.u * 22 * (i ? -1 : 1), j.r * 16, e), bw: side, mb: room };
       });
     } else {
       // Split: each message gets its own half of the cloth, so the two
@@ -391,16 +402,16 @@
         const s = i === 0 ? -q4 : q4;
         const d = [s * A.R[0], s * A.R[1]];
         return i === 0
-          ? { c: at(d, j.u * 20, 0, e), bw: ext(e.R) * 0.44, bl: ext(e.U) * 0.84 }
-          : { c: at(d, 0, j.r * 20, e), bw: ext(e.R) * 0.9, bl: ext(e.U) * 0.43 };
+          ? { c: at(d, j.u * 20, 0, e), bw: ext(e.R) * 0.44, mb: ext(e.U) * 0.67 }
+          : { c: at(d, 0, j.r * 20, e), bw: ext(e.R) * 0.9, mb: ext(e.U) * 0.34 };
       });
     }
     const glyphs = [];
     const info = msgs.map((m, i) => {
       const e = EDGES[m.edge];
       const rnd = mulberry32((weave.seed + 0x9e3779b9 * (i + 1)) >>> 0);
-      const bandFrac = (regions[i].bf || 0.76) + 0.08 * (i ? 1 - j.band : j.band);
-      const g = layoutSolid(m.text, regions[i].bw, regions[i].bl, rnd, bandFrac);
+      const sizeJitter = 0.94 + 0.06 * (i ? 1 - j.band : j.band);
+      const g = layoutSolid(m.text, regions[i].bw, regions[i].mb, rnd, sizeJitter);
       if (!g) return null;
       glyphs.push({ lines: g.lines, extras: g.extras, font: g.font, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
       return { textW: g.textW, bandLen: g.bandLen, lines: g.text, St: g.St, edge: m.edge };
@@ -458,14 +469,15 @@
     const physW = turned ? avail : w;
     const physH = turned ? w : avail;
     const fit = Math.min(physW, physH) * 0.96 / (CLOTH + 40);
-    const prevVis = view.visW;
+    const prevVis = view.visW, prevVisH = view.visH;
     view = {
       w, h, dpr, fit,
       cx: w / 2,
       cy: top + avail / 2,
       visW: physW / fit,
+      visH: physH / fit,
     };
-    if (scene && Math.abs((prevVis || 0) - view.visW) > 1) {
+    if (scene && (Math.abs((prevVis || 0) - view.visW) > 1 || Math.abs((prevVisH || 0) - view.visH) > 1)) {
       scene = { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, scene.msg.q) };
       fade = null;
     }
@@ -906,18 +918,22 @@
   /** Simulated foreshortening: what the eye sees from `edge` at a grazing angle. */
   function drawPreview(cv, edge, fitHeight = false) {
     if (!scene) return;
-    if (fitHeight) {
-      const inf = (scene.msg.info || []).find((i) => i && i.edge === edge);
-      cv.height = Math.round((cv.width * 1.05) / (inf ? inf.St : S.stretch)) + 24;
-    }
-    const size = 900;
+    const info = (scene.msg.info || []).find((i) => i && i.edge === edge);
+    const St = info ? info.St : S.stretch;
+    const span = 2000;                       // image units rendered, square
+    const cropW = CLOTH + 80;                // units shown across the preview
+    const scale = cv.width / cropW;          // preview px per unit, across
+    // enough of the stretched axis for the block plus its ascenders/descenders
+    const need = Math.min(span, (info ? info.bandLen : CLOTH) * 1.9);
+    if (fitHeight) cv.height = Math.round((need / St) * scale) + 20;
+    const size = 1600;
     const off = document.createElement('canvas');
     off.width = size; off.height = size;
     const c = off.getContext('2d');
     const theme = THEMES[S.theme] || THEMES.linen;
     c.fillStyle = theme.bg;
     c.fillRect(0, 0, size, size);
-    const k = size / (CLOTH + 280); // wide enough for capitals and ascenders
+    const k = size / span;
     drawScene(c, scene, 1, (cc) => {
       cc.setTransform(1, 0, 0, 1, 0, 0);
       cc.translate(size / 2, size / 2);
@@ -928,12 +944,10 @@
     const out = cv.getContext('2d');
     out.fillStyle = theme.bg;
     out.fillRect(0, 0, cv.width, cv.height);
-    const info = (scene.msg.info || []).find((i) => i && i.edge === edge);
-    const St = info ? info.St : S.stretch;
-    const dw = cv.width * 1.05;
-    const dh = (size / St) * (dw / size);
+    const dh = (span / St) * scale;
     out.imageSmoothingQuality = 'high';
-    out.drawImage(off, (cv.width - dw) / 2, (cv.height - dh) / 2, dw, dh);
+    out.drawImage(off, ((span - cropW) / 2) * k, 0, cropW * k, size,
+      0, (cv.height - dh) / 2, cv.width, dh);
   }
   function drawPreviews() {
     if (!setupDlg.open) return;
