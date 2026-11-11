@@ -26,6 +26,7 @@
   const FONT = '"Helvetica Neue", Helvetica, Arial, "Liberation Sans", "DejaVu Sans", sans-serif';
   const FONT_WEIGHT = 800;
   const MASK_RES = 2; // mask pixels per (unstretched) image unit
+  const MAX_STRETCH = 24;
 
   const SUITS = {
     S: { name: 'SPADES', sym: '♠' },
@@ -69,14 +70,15 @@
     haptics: true,
     indicator: 'card',
     startCard: 'random',
-    stretch: 6,
+    stretch: 8,
     pitch: 6,
     density: 1,
-    layout: 'split',
+    layout: 'overlap',
+    letters: 'solid',
     theme: 'linen',
     holdOrientation: true,
   };
-  const STORE_KEY = 'loom.settings.v1';
+  const STORE_KEY = 'loom.settings.v3';
 
   // ---------------------------------------------------------------- utils
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -240,8 +242,12 @@
     return out;
   }
 
-  function fitText(text, budgetW, budgetH) {
-    // budgetH is in *unstretched* units.
+  /**
+   * Size `text` the way tilt-to-read posters are made: set it as wide as the
+   * box allows, then stretch it along the reading axis until it fills the
+   * box's length. Each phrase gets its own stretch (never less than minS).
+   */
+  function fitText(text, budgetW, budgetL, minS, maxS) {
     mctx.font = `${FONT_WEIGHT} 100px ${FONT}`;
     let best = null;
     for (const lines of lineCandidates(text)) {
@@ -255,28 +261,43 @@
       const lineH = asc + desc;
       const gap = lineH * 0.45;
       const total = lines.length * lineH + (lines.length - 1) * gap;
-      const k = Math.min(budgetW / maxW, budgetH / total);
+      const k = Math.min(budgetW / maxW, budgetL / (minS * total));
+      const St = clamp(budgetL / (total * k), minS, maxS);
       const score = k * (1 - 0.06 * (lines.length - 1)); // prefer fewer lines
-      if (!best || score > best.score) best = { lines, k, maxW, asc, lineH, gap, total, score };
+      if (!best || score > best.score) best = { lines, k, St, maxW, asc, lineH, gap, total, score };
     }
     return best;
   }
 
   /**
-   * Weave `text` so it can be read from `edgeName`.
-   * Threads are added to `path`; c is the band centre in image units.
+   * Weave `text` so it can be read from `edgeName`; c is the band centre in
+   * image units.
+   *  – 'solid' letters: the real glyphs, stretched S× along the reading axis
+   *    (for the default bottom edge that is a plain vertical stretch).
+   *  – 'threads' letters: the glyphs sampled into parallel threads (added to
+   *    `path`).
    */
-  function weaveText(path, text, edgeName, c, budgetW, budgetL) {
+  function weaveText(path, glyphs, text, edgeName, c, budgetW, budgetL) {
     const edge = EDGES[edgeName];
-    const St = S.stretch;
     const p = S.pitch;
     const w = p * 0.6;
-    const f = fitText(text, budgetW, budgetL / St);
+    const f = fitText(text, budgetW, budgetL, S.stretch, MAX_STRETCH);
     if (!f) return null;
+    const St = f.St;
 
     const k = f.k;
     const textW = f.maxW * k;    // along R, image units
     const bandH = f.total * k;   // along U, unstretched units
+
+    if (S.letters !== 'threads') {
+      glyphs.push({
+        lines: f.lines,
+        font: `${FONT_WEIGHT} ${100 * k}px ${FONT}`,
+        asc: f.asc * k, lineH: f.lineH * k, gap: f.gap * k, total: bandH,
+        ox: c[0], oy: c[1], U: edge.U, R: edge.R, St,
+      });
+      return { textW, bandLen: bandH * St, lines: f.lines, count: 0, St, edge: edgeName };
+    }
     const pad = 4;
     const mw = Math.ceil(textW * MASK_RES) + pad * 2;
     const mh = Math.ceil(bandH * MASK_RES) + pad * 2;
@@ -334,7 +355,7 @@
         }
       }
     }
-    return { textW, bandLen: bandH * St, lines: f.lines, count };
+    return { textW, bandLen: bandH * St, lines: f.lines, count, St, edge: edgeName };
   }
 
   function buildMessage(card, weave, q) {
@@ -347,6 +368,10 @@
     const same = axisOf(msgs[0].edge) === axisOf(msgs[1].edge);
     const j = weave.jitter;
     const A = EDGES[msgs[0].edge];
+    // Usable extent along an axis: the cloth height, and whatever part of the
+    // cloth width is actually on screen.
+    const Wx = Math.min(CLOTH, view.visW * 0.94);
+    const ext = (vec) => (Math.abs(vec[0]) > 0.5 ? Wx : CLOTH);
     const at = (d, along, across, e) => [
       MID + d[0] + along * e.U[0] + across * e.R[0],
       MID + d[1] + along * e.U[1] + across * e.R[1],
@@ -355,36 +380,37 @@
     let regions;
     if (same) {
       // Both read along the same axis: stack them, phrase 1 farther away.
-      const gap = 46;
-      const bl = (CLOTH * 0.84 - gap) / 2;
+      const gap = 50;
+      const bl = (ext(A.U) * 0.88 - gap) / 2;
       const off = bl / 2 + gap / 2;
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
         const s = i === 0 ? off : -off;
-        return { c: at([s * A.U[0], s * A.U[1]], 0, j.r * 10, e), bw: CLOTH * 0.9, bl };
+        return { c: at([s * A.U[0], s * A.U[1]], j.u * 10, j.r * 8, e), bw: ext(e.R) * 0.9, bl };
       });
     } else if (S.layout === 'overlap') {
       // Classic look: both messages cross in the centre.
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
-        return { c: at([0, 0], j.u * 24 * (i ? -1 : 1), j.r * 14, e), bw: CLOTH * 0.9, bl: CLOTH * 0.84 };
+        return { c: at([0, 0], j.u * 24 * (i ? -1 : 1), j.r * 14, e), bw: ext(e.R) * 0.9, bl: ext(e.U) * 0.84 };
       });
     } else {
       // Split: each message gets its own half of the cloth, so the two
       // never overlap and each reads cleanly.
-      const q4 = CLOTH / 4 + 4;
+      const q4 = ext(A.R) / 4 + 4;
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
         const s = i === 0 ? -q4 : q4;
         const d = [s * A.R[0], s * A.R[1]];
         return i === 0
-          ? { c: at(d, j.u * 20, 0, e), bw: CLOTH * 0.44, bl: CLOTH * 0.84 }
-          : { c: at(d, 0, j.r * 20, e), bw: CLOTH * 0.9, bl: CLOTH * 0.43 };
+          ? { c: at(d, j.u * 20, 0, e), bw: ext(e.R) * 0.44, bl: ext(e.U) * 0.84 }
+          : { c: at(d, 0, j.r * 20, e), bw: ext(e.R) * 0.9, bl: ext(e.U) * 0.43 };
       });
     }
-    const info = msgs.map((m, i) => weaveText(axisOf(m.edge) === 'v' ? vPath : hPath,
+    const glyphs = [];
+    const info = msgs.map((m, i) => weaveText(axisOf(m.edge) === 'v' ? vPath : hPath, glyphs,
       m.text, m.edge, regions[i].c, regions[i].bw, regions[i].bl));
-    return { v: vPath, h: hPath, q, key: cardKey(card), info, card };
+    return { v: vPath, h: hPath, glyphs, q, key: cardKey(card), info, card };
   }
 
   // ---------------------------------------------------------------- scene
@@ -431,12 +457,23 @@
     const top = document.getElementById('top').getBoundingClientRect().bottom;
     const bottom = document.getElementById('bottom').getBoundingClientRect().top;
     const avail = Math.max(120, bottom - top);
+    // Fit the cloth's height to the screen's long axis (as the phone is held);
+    // on a portrait phone the sides of the weave run off the screen.
+    const turned = Math.abs(screenAngle()) % 180 === 90;
+    const physW = turned ? avail : w;
+    const physH = turned ? w : avail;
+    const fit = Math.min(physW, physH) * 0.96 / (CLOTH + 40);
+    const prevVis = view.visW;
     view = {
-      w, h, dpr,
+      w, h, dpr, fit,
       cx: w / 2,
       cy: top + avail / 2,
-      fit: Math.min(w * 0.96, avail * 0.96) / (CLOTH + 40),
+      visW: physW / fit,
     };
+    if (scene && Math.abs((prevVis || 0) - view.visW) > 1) {
+      scene = { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, scene.msg.q) };
+      fade = null;
+    }
     requestDraw();
   }
 
@@ -474,6 +511,28 @@
     c.lineWidth = msgW;
     c.stroke(sc.msg.h);
     c.stroke(sc.msg.v);
+    // Solid stretched words. Halos for every phrase first, then the ink, so
+    // the crossing phrases never cut into each other.
+    for (const pass of ['halo', 'ink']) {
+      for (const g of sc.msg.glyphs) {
+        c.save();
+        // local x → reading direction R; local y (down the glyph) → −U, ×St
+        c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
+        c.font = g.font;
+        c.textAlign = 'center';
+        c.textBaseline = 'alphabetic';
+        c.lineJoin = 'round';
+        c.lineWidth = pad * 1.6;
+        c.strokeStyle = theme.bg;
+        c.fillStyle = theme.ink;
+        g.lines.forEach((ln, i) => {
+          const y = -g.total / 2 + i * (g.lineH + g.gap) + g.asc;
+          if (pass === 'halo') c.strokeText(ln, 0, y);
+          else c.fillText(ln, 0, y);
+        });
+        c.restore();
+      }
+    }
     c.restore();
 
     for (const L of sc.weave.over) stroke(L.path, L.w);
@@ -822,7 +881,7 @@
     updateOutputs();
   }
   function updateOutputs() {
-    form.elements.stretchOut.value = `${(+S.stretch).toFixed(1)}× · ~${Math.round(Math.asin(1 / S.stretch) * 180 / Math.PI)}°`;
+    form.elements.stretchOut.value = `at least ${(+S.stretch).toFixed(1)}×`;
     form.elements.pitchOut.value = (+S.pitch).toFixed(1);
     form.elements.densityOut.value = `${Math.round(S.density * 100)}%`;
     form.elements.pinchStepOut.value = `${Math.round((S.pinchStep - 1) * 100)}%`;
@@ -889,7 +948,10 @@
   /** Simulated foreshortening: what the eye sees from `edge` at a grazing angle. */
   function drawPreview(cv, edge, fitHeight = false) {
     if (!scene) return;
-    if (fitHeight) cv.height = Math.round((cv.width * 1.05) / S.stretch) + 24;
+    if (fitHeight) {
+      const inf = (scene.msg.info || []).find((i) => i && i.edge === edge);
+      cv.height = Math.round((cv.width * 1.05) / (inf ? inf.St : S.stretch)) + 24;
+    }
     const size = 900;
     const off = document.createElement('canvas');
     off.width = size; off.height = size;
@@ -908,8 +970,10 @@
     const out = cv.getContext('2d');
     out.fillStyle = theme.bg;
     out.fillRect(0, 0, cv.width, cv.height);
+    const info = (scene.msg.info || []).find((i) => i && i.edge === edge);
+    const St = info ? info.St : S.stretch;
     const dw = cv.width * 1.05;
-    const dh = (size / S.stretch) * (dw / size);
+    const dh = (size / St) * (dw / size);
     out.imageSmoothingQuality = 'high';
     out.drawImage(off, (cv.width - dw) / 2, (cv.height - dh) / 2, dw, dh);
   }

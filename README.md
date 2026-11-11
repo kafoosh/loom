@@ -25,7 +25,7 @@ Other controls: drag with one finger to pan, and double-tap to recentre (the car
 - both phrases, and which edge each is read from (`{value}`, `{suit}`, and `|` for a line break)
 - suit order (CHaSeD or SHoCkeD), pinch sensitivity, gesture lock, haptics
 - indicator style: `7♥`, a code (`no. 07·2`), dots, or off
-- stretch (how flat you have to tilt), thread size, number of decoy threads, layout, and theme
+- stretch, letter style (solid words or woven threads), number of decoy threads, layout, and theme
 - **live previews** that simulate the tilted view, so you can check the text reads before you perform
 
 Settings are saved on the device.
@@ -36,8 +36,8 @@ On a computer: scroll changes the value, shift+scroll changes the suit, and the 
 
 - Add the page to your home screen so it opens full screen, without browser bars.
 - Turn off auto-rotate, or leave "Keep weave fixed if the screen auto-rotates" switched on.
-- If the text is hard to read, lower **Stretch** so you don't have to tilt as far. Raise it to hide the words better.
-- The **split** layout (the default) gives each message its own half of the cloth, which reads best. **overlap** crosses the two in the centre, like classic tilt-to-read posters.
+- Each phrase is stretched just enough to fill the square, so short phrases get less stretch and long ones more. **Stretch** sets the minimum. Raise it to hide the words better, or lower it so you don't have to tilt as far.
+- The **overlap** layout (the default) is the classic construction. The **split** layout gives each phrase its own half instead.
 
 ## Hosting on GitHub Pages
 
@@ -47,4 +47,12 @@ To try it locally, run `python3 -m http.server` in this folder and open <http://
 
 ## How it works
 
-Each message is drawn as normal text into a hidden canvas. That canvas is sampled column by column on a fixed thread grid, and every run of ink becomes one thread, stretched ×6 along the reading axis. At a grazing viewing angle, foreshortening squashes the threads back into letters. Threads running the other way shrink to hairlines from that angle, so they barely get in the way. Decoy warp and weft threads, diagonals and fringe sit on the same grid to hide the words when the phone is flat. Everything is vector paths drawn on a canvas, so it stays sharp at any zoom.
+It uses the classic tilt-to-read construction:
+
+1. Phrase 1 is set in a bold sans as wide as the square, then stretched vertically until it fills the square. That is about 9–16×, depending on the phrase's length.
+2. Phrase 2 gets the same treatment and is then rotated 90°, so it is stretched horizontally.
+3. The two are laid over each other in the same square.
+
+At a grazing angle, foreshortening squashes the stretched phrase back into normal letters. Strokes running the other way shrink to hairlines from that angle, so the other phrase barely gets in the way. Look from the charger end to read phrase 1, and from the right edge to read phrase 2.
+
+Decoy warp and weft threads, diagonals and fringe make it look like a woven cloth. The words are drawn as live, transformed canvas text, so they stay sharp at any zoom and are redrawn the moment the card changes.

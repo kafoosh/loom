@@ -61,9 +61,9 @@
         <p class="note"><code>{value}</code> and <code>{suit}</code> are replaced with the input card. Use <code>|</code> to force a line break.</p>
         <label>Read phrase 2 from
           <select name="edgeB">
-            <option value="right">right edge</option>
-            <option value="left">left edge</option>
+            <option value="right">right edge (rotated 90°)</option>
             <option value="bottom">bottom edge (charger)</option>
+            <option value="left">left edge</option>
             <option value="top">top edge</option>
           </select>
         </label>
@@ -107,8 +107,8 @@
 
       <fieldset>
         <legend>Weave</legend>
-        <label>Stretch (higher = flatter tilt) <output name="stretchOut"></output>
-          <input type="range" name="stretch" min="3" max="12" step="0.5">
+        <label>Stretch: each phrase is stretched to fill the square (higher = better hidden, flatter tilt) <output name="stretchOut"></output>
+          <input type="range" name="stretch" min="4" max="16" step="0.5">
         </label>
         <label>Thread size <output name="pitchOut"></output>
           <input type="range" name="pitch" min="4" max="10" step="0.5">
@@ -116,10 +116,16 @@
         <label>Decoy threads <output name="densityOut"></output>
           <input type="range" name="density" min="0" max="2" step="0.1">
         </label>
-        <label>Layout
+        <label>Letters
+          <select name="letters">
+            <option value="solid">solid words, stretched (classic)</option>
+            <option value="threads">woven threads</option>
+          </select>
+        </label>
+        <label>Layout (when the phrases are read from different edges)
           <select name="layout">
-            <option value="split">split: each message in its own half (clearest)</option>
-            <option value="overlap">overlap: messages cross in the centre (classic)</option>
+            <option value="overlap">overlap: both phrases fill the square, crossing (classic)</option>
+            <option value="split">split: each phrase in its own half</option>
           </select>
         </label>
         <label>Theme
@@ -139,7 +145,7 @@
           <li>Have a card chosen and shown to you.</li>
           <li>Pick the phone back up and "adjust the weave": <b>spread/pinch</b> steps the value (A → 2 → … → K → A), <b>twist a quarter turn</b> steps the suit. Each step gives a tick and updates the indicator in the bottom‑right corner.</li>
           <li>Let go: the image straightens and the hidden message is rewoven to match.</li>
-          <li>Tilt the phone and look from the bottom edge: <b>YOU WILL PICK</b>. Turn it and look from the side: <b>THE 7 OF HEARTS</b>.</li>
+          <li>Tilt the phone and look along it from the charger end: <b>YOU WILL PICK</b>. Turn the phone a quarter turn and look from the right edge: <b>THE 7 OF HEARTS</b>.</li>
         </ol>
         <p class="note">Other controls: one finger pans, double‑tap recentres (keeps the card). Long‑press the <b>loom</b> wordmark to open this panel. On a computer: scroll = value, shift+scroll = suit, arrow keys step value/suit, <kbd>S</kbd> opens setup.</p>
         <p class="note">Tip: add the page to your home screen so it opens full screen without browser bars.</p>
