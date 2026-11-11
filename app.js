@@ -183,6 +183,12 @@
    * lowercase the short letters make the band and the tall ones stick out.
    */
   const allCaps = () => S.letterCase === 'upper';
+  // In capitals only the tail of the Q hangs below the line. It is stretched
+  // this much less than the letters, so that it still fits on the screen.
+  const CAPS_TAIL = 0.25;
+  /** Does a line of capitals have anything hanging below it? */
+  const hasTail = (text) => /[^A-PR-Z0-9 \u00A0.!?'|\n-]/.test(text);
+  const tallRatio = () => (allCaps() ? CAPS_TAIL : clamp(S.ascender, 0.1, 1));
   /** The letter whose height is the height of the band. */
   const bodyProbe = () => (allCaps() ? 'H' : 'x');
   function applyCase(text, first) {
@@ -234,17 +240,29 @@
    * stretched less than the bodies of the letters (see `S.ascender`), which
    * leaves the bodies most of the screen.
    */
-  function pageSlot(edge) {
+  function pageSlot(edge, text = '') {
     const W = view.visW, H = view.visH;                 // a page is exactly one screen
     const sideways = Math.abs(EDGES[edge].U[0]) > 0.5; // stretched across the screen
-    // What is left over after the (squashed) ascenders and descenders.
     const xh = measurePhrase('x').xh;
-    // (capitals have nothing above them and only the odd tail below)
-    // (in capitals a page's letters run its full length, so they meet the
-    // next page's letters end to end and the loom has no seams)
-    const body = allCaps() ? 1 : 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
     const run = allCaps() ? 0.995 : 0.985;
-    return sideways ? { width: H * run, maxBand: W * body } : { width: W * run, maxBand: H * body };
+    const len = sideways ? W : H;                       // room along the stretch
+    let body, shift = 0;
+    if (allCaps()) {
+      // Capitals run the full length of the page, so neighbouring pages meet
+      // end to end with no seam. Only a phrase with a tail in it (the Q of
+      // QUEEN) is a little shorter, and moved up, to keep its tail on screen.
+      body = 1;
+      if (hasTail(text)) {
+        mctx.font = `${S.weight} 100px ${FONT}`;
+        const tail = (mctx.measureText('Q').actualBoundingBoxDescent || 12) / 100;
+        body = 0.995 / (1 + (tail / xh) * CAPS_TAIL);
+        shift = (len * (1 - body)) / 2;
+      }
+    } else {
+      // What is left over after the (squashed) ascenders and descenders.
+      body = 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
+    }
+    return { width: (sideways ? H : W) * run, maxBand: len * body, shift };
   }
 
   const GAP = '  '; // between repeats of a phrase: two word spaces
@@ -293,24 +311,35 @@
    * row) when first needed and then cached.
    */
   const pageCache = new Map();
-  function loomPage(seed, L, ci, cj) {
-    const key = `${seed}|${L}|${ci}|${cj}`;
-    let page = pageCache.get(key);
-    if (page) return page;
-    if (pageCache.size > 120) pageCache.clear();
+  function loomPage(seed, L, layer, ci, cj) {
+    const key = `${seed}|${L}|${layer}|${ci}|${cj}`;
+    if (pageCache.has(key)) return pageCache.get(key);
+    if (pageCache.size > 240) pageCache.clear();
     const St = Math.min(MAX_STRETCH, S.stretch);
     const xh = measurePhrase('x').xh;
-    const glyphs = [S.edgeA, S.edgeB].map((edge, i) => {
-      const e = EDGES[edge];
-      const slot = pageSlot(edge);
-      const rnd = mulberry32(Math.floor(hash(seed, L + 64, ci, cj, i) * 4294967296));
-      const em = slot.maxBand / (St * xh);
-      const g = layoutSolid(gibberish(rnd, slot.width / (em * 1.3)), slot.width, slot.maxBand, rnd, 1, 0.7);
-      return g && { lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, xhU: g.xhU, ra: g.ra, St: g.St, ox: MID, oy: MID, U: e.U, R: e.R };
-    }).filter(Boolean);
-    page = { glyphs };
+    const edge = layer ? S.edgeB : S.edgeA;
+    const e = EDGES[edge];
+    const slot = pageSlot(edge);
+    const rnd = mulberry32(Math.floor(hash(seed, L + 64, ci, cj, layer) * 4294967296));
+    const em = slot.maxBand / (St * xh);
+    const g = layoutSolid(gibberish(rnd, slot.width / (em * 1.3)), slot.width, slot.maxBand, rnd, 1, 0.7);
+    const page = g && { lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, xhU: g.xhU, ra: g.ra, St: g.St, ox: MID, oy: MID, U: e.U, R: e.R };
     pageCache.set(key, page);
     return page;
+  }
+  /**
+   * The two phrases of the loom are laid out independently, and neither is
+   * on a neat grid. Lettering that is stretched down the image sits in
+   * columns, and each column is shifted up or down by its own random amount;
+   * lettering stretched across sits in rows, each shifted sideways. So the
+   * places where one page's letters end and the next begin never line up
+   * across the loom. The columns and rows themselves are shifted too (n =
+   * null), so nothing lines up with the message either: when it is locked
+   * in, the loom's threads simply run up to it and stop wherever they happen
+   * to be. Returns the shift as a fraction of a page.
+   */
+  function stagger(seed, L, layer, n) {
+    return n === null ? hash(seed, L + 64, layer * 7 + 5, 0x2f, 0x77) : hash(seed, L + 64, layer * 7 + 3, n, 0x51ab);
   }
 
   // ---------------------------------------------------------------- messages
@@ -403,7 +432,7 @@
 
     // Ascenders and descenders are stretched only `ra` as much as the bodies.
     // Heights (in ems above the baseline) go through this before the stretch.
-    const ra = clamp(S.ascender, 0.1, 1);
+    const ra = tallRatio();
     const squash = (ey) => (ey > xh ? xh + (ey - xh) * ra : ey < 0 ? ey * ra : ey);
     const extras = new Path2D();
     // Every shape is wound the same way, so overlapping pieces add up
@@ -488,12 +517,15 @@
         }
         x += a + track;
       });
-      return { chars: placed, y: base };
+      // (a line of capitals with no tails can be drawn in one go)
+      return { chars: placed, y: base, plain: allCaps() && !hasTail(ln) };
     });
     // the area the phrase needs clear of loom threads (unstretched, y down)
-    // (Capitals fill their band, so the loom can come right up to it.)
+    // (Capitals fill their band. There the cleared area stops a little short
+    // of the ends of the letters, so the loom's threads run into the message
+    // instead of leaving a pale frame around it.)
     const box = allCaps()
-      ? { hw: textW / 2 + em * 0.08, up: total / 2 + em * 0.004, down: total / 2 + em * 0.004 }
+      ? { hw: textW / 2 - em * 0.1, up: total * 0.487, down: hasTail(t) ? total / 2 + em * 0.2 * ra : total * 0.487 }
       : { hw: textW / 2 + em * 0.25, up: total / 2 + Math.max(0.04, 0.83 - xh) * em * ra, down: total / 2 + 0.31 * em * ra };
     return { lines: out, extras, box, em, xhU, ra, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
@@ -552,9 +584,10 @@
       // and is stretched down the screen; phrase 2 runs the full height and
       // is stretched across. A phrase too short to reach is repeated.
       regions = msgs.map((m) => {
-        const slot = pageSlot(m.edge);
+        const slot = pageSlot(m.edge, m.text);
         m.text = repeatToFill(m.text, slot);
-        return { c: [MID, MID], bw: slot.width, mb: slot.maxBand, track: 0.7, exact: true };
+        const U = EDGES[m.edge].U;
+        return { c: [MID + U[0] * slot.shift, MID + U[1] * slot.shift], bw: slot.width, mb: slot.maxBand, track: 0.7, exact: true };
       });
     } else {
       // Split: each message gets its own half of the cloth, so the two
@@ -711,7 +744,7 @@
       if (!onScreen) break;
       const chars = vis ? ln.chars.filter((o) => !(o.x > vis[1] || o.x + g.em * 1.2 < vis[0])) : ln.chars;
       if (!chars.length) continue;
-      if (!(g.ra < 1)) {
+      if (!(g.ra < 1) || ln.plain) {
         for (const o of chars) c.fillText(o.ch, o.x, ln.y);
         continue;
       }
@@ -757,25 +790,31 @@
     rasterCache.clear();
     rasterPx = 0;
   }
-  /** A page as a bitmap with `res` pixels per layout unit, or null if none can be made this frame. */
-  function pageBitmap(seed, L, ci, cj, res, budget) {
-    const key = `${seed}|${L}|${ci}|${cj}`;
+  /**
+   * A page as a bitmap with about `res` pixels per layout unit, or null if
+   * none can be made this frame. Along the stretch the lettering changes
+   * 24× more slowly, so the bitmap has half the resolution that way.
+   */
+  function pageBitmap(seed, L, layer, ci, cj, res, budget) {
+    const key = `${seed}|${L}|${layer}|${ci}|${cj}`;
     let hit = rasterCache.get(key);
     if (hit && hit.res >= res) return hit;
     if (budget.left <= 0) return hit || null; // make only a few per frame; the rest follow
+    const g = loomPage(seed, L, layer, ci, cj);
+    if (!g) return null;
     budget.left--;
-    if (rasterPx > 16e6) { rasterCache.clear(); rasterPx = 0; }
+    if (rasterPx > 16e6) { rasterCache.clear(); rasterPx = 0; hit = null; }
     const W = view.visW, H = view.visH;
+    const down = Math.abs(g.U[1]) > 0.5; // stretched down the page
+    const rx = down ? res : res / 2, ry = down ? res / 2 : res;
     const cv = document.createElement('canvas');
-    cv.width = Math.max(1, Math.ceil(W * res));
-    cv.height = Math.max(1, Math.ceil(H * res));
+    cv.width = Math.max(1, Math.ceil(W * rx));
+    cv.height = Math.max(1, Math.ceil(H * ry));
     const g2 = cv.getContext('2d');
     g2.fillStyle = (THEMES[S.theme] || THEMES.linen).ink;
-    for (const g of loomPage(seed, L, ci, cj).glyphs) {
-      g2.setTransform(res, 0, 0, res, 0, 0);
-      g2.translate(W / 2 - MID, H / 2 - MID);
-      drawGlyphs(g2, g, null);
-    }
+    g2.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+    g2.translate(W / 2 - MID, H / 2 - MID);
+    drawGlyphs(g2, g, null);
     if (hit) rasterPx -= hit.cv.width * hit.cv.height;
     hit = { cv, res };
     rasterCache.set(key, hit);
@@ -831,7 +870,7 @@
       }
     }
     const W = view.visW, H = view.visH;
-    const budget = { left: 6 };
+    const budget = { left: 12 };
     let pending = false;
     c.save();
     c.fillStyle = theme.ink;
@@ -839,25 +878,35 @@
       const sc = Math.pow(2, -L);
       const cw = W * sc, ch = H * sc;
       const res = k * sc;                          // device px per layout unit of this page
-      const small = res < 0.75;                    // small enough to draw from a bitmap
+      const small = res < 0.5;                     // small enough to draw from a bitmap
       const pad = small ? 0 : 0.6;                 // (lowercase lettering runs on past its page)
-      const i0 = Math.floor((x0 - MID) / cw + 0.5 - pad), i1 = Math.ceil((x1 - MID) / cw - 0.5 + pad);
-      const j0 = Math.floor((y0 - MID) / ch + 0.5 - pad), j1 = Math.ceil((y1 - MID) / ch - 0.5 + pad);
       c.globalAlpha = alpha * a;
-      for (let ci = i0; ci <= i1; ci++) {
-        for (let cj = j0; cj <= j1; cj++) {
-          const px = MID + ci * cw, py = MID + cj * ch;
-          worldTransform(c, V);
-          c.translate(px, py);
-          c.scale(sc, sc);
-          if (small) {
-            const bmp = pageBitmap(seed, L, ci, cj, Math.pow(2, Math.ceil(Math.log2(res))), budget);
-            if (bmp) c.drawImage(bmp.cv, -W / 2, -H / 2, W, H);
-            else pending = true;
-            continue;
-          }
-          c.translate(-MID, -MID);
-          for (const g of loomPage(seed, L, ci, cj).glyphs) {
+      for (const layer of [0, 1]) {
+        const down = Math.abs(EDGES[layer ? S.edgeB : S.edgeA].U[1]) > 0.5;
+        // m runs over the unshifted direction (columns for lettering that
+        // is stretched down, rows for lettering stretched across)
+        const [lo, hi, size] = down ? [x0, x1, cw] : [y0, y1, ch];
+        const [lo2, hi2, size2] = down ? [y0, y1, ch] : [x0, x1, cw];
+        const shift = stagger(seed, L, layer, null);
+        const m0 = Math.floor((lo - MID) / size - shift + 0.5 - pad), m1 = Math.ceil((hi - MID) / size - shift - 0.5 + pad);
+        for (let m = m0; m <= m1; m++) {
+          const off = stagger(seed, L, layer, m);
+          const n0 = Math.floor((lo2 - MID) / size2 - off + 0.5 - pad), n1 = Math.ceil((hi2 - MID) / size2 - off - 0.5 + pad);
+          for (let n = n0; n <= n1; n++) {
+            const ci = down ? m : n, cj = down ? n : m;
+            const px = MID + (down ? m + shift : n + off) * cw, py = MID + (down ? n + off : m + shift) * ch;
+            worldTransform(c, V);
+            c.translate(px, py);
+            c.scale(sc, sc);
+            if (small) {
+              const bmp = pageBitmap(seed, L, layer, ci, cj, Math.pow(2, Math.round(Math.log2(res))), budget);
+              if (bmp) c.drawImage(bmp.cv, -W / 2, -H / 2, W, H);
+              else pending = true;
+              continue;
+            }
+            const g = loomPage(seed, L, layer, ci, cj);
+            if (!g) continue;
+            c.translate(-MID, -MID);
             // which of its letters are on screen
             const ax = (x0 - px) / sc, bx = (x1 - px) / sc, ay = (y0 - py) / sc, by = (y1 - py) / sc;
             const p = ax * g.R[0] + ay * g.R[1], q = bx * g.R[0] + by * g.R[1];
