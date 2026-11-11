@@ -13,7 +13,7 @@ The page opens as an endless loom of threads with nothing hidden in it. You secr
    - **Twist** clockwise / anticlockwise: next / previous suit every 22.5°, so all four go by within a quarter turn (wraps around). You can stop at any angle; the picture stays where you leave it.
 
    Each step gives a haptic tick, and the faint indicator in the bottom-right corner shows the current card (e.g. `7♥`).
-4. **Double-tap** to lock the card in. The loom straightens to the nearest right angle, the message fades in upright and sized to fit the screen, and the indicator gets a thin underline. From now on pinching and twisting only move the picture; the card cannot change.
+4. **Double-tap** to lock the card in. Whatever angle the picture is at, the message fades in upright and sized to fit the screen, and the indicator gets a thin underline. From now on pinching and twisting only move the picture; the card cannot change.
 5. Tilt from the bottom edge: **THE CARD YOU CHOSE WAS**. Turn the phone and tilt from the left edge: **THE SEVEN OF HEARTS**.
 
 Other controls: drag with one finger to pan. Once locked, double-tap again brings the message back to the centre of the screen. **Reweave** makes a new loom, clears the message and unlocks, ready for the next performance. The indicator keeps the last card, so you can count from it.
@@ -68,7 +68,7 @@ The message fills the whole screen. Phrase 1 runs the full width and is stretche
 
 Lowercase is still available in setup. There the short letters make the band and the tall ones (h, d, t, p, q) stick out of it. Those tall parts are stretched only about a third as much, so they fit on screen, and some of their stems run on as loose threads.
 
-The loom is made of the same thing as the message. It is page after page of stretched lettering, one phrase across each page and one down, except that the letters are nonsense. So the screen looks the same before and after you lock in; only the letters change. Pages are generated from a random seed when they come on screen, they tile in every direction, and they exist at every power-of-two scale, so zooming in keeps finding new pages the same size on screen. When the message is woven in, the nonsense lettering under it is cleared, so nothing strikes through the words.
+The loom is made of the same thing as the message. It is page after page of stretched lettering, one phrase across each page and one down, except that the letters are nonsense. So the screen looks the same before and after you lock in; only the letters change. Pages are generated from a random seed when they come on screen, they tile in every direction, and they exist at every power-of-two scale, so zooming in keeps finding new pages the same size on screen. When the message is woven in, the nonsense lettering under it is cleared, so nothing strikes through the words. At the same moment the loom is laid out afresh around the message, at the message's angle and scale, with the message as its centre page. So when you zoom out afterwards, the pages around it line up with it and their threads run straight into it.
 
 Lines that come from the words themselves:
 

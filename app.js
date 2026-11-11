@@ -198,9 +198,16 @@
    * covers the page, plus the numbers that place the two phrases and decide
    * which letter stems run on as loose threads.
    */
-  function buildWeave(seed) {
+  function buildWeave(seed, base) {
     const r = mulberry32(seed);
-    return { seed, jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() } };
+    return {
+      seed,
+      jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() },
+      // Where the loom's pages sit: centre, angle and scale of page (0, 0).
+      // Locking in re-bases this onto the message, so the message is one
+      // page of the loom and the pages around it line up with it.
+      base: base || { x: MID, y: MID, rot: 0, k: 1 },
+    };
   }
 
   /** Deterministic pseudo-random number in [0, 1) from five integers. */
@@ -225,12 +232,12 @@
    * leaves the bodies most of the screen.
    */
   function pageSlot(edge) {
-    const W = view.visW * 0.97, H = view.visH * 0.97;
+    const W = view.visW, H = view.visH;                 // a page is exactly one screen
     const sideways = Math.abs(EDGES[edge].U[0]) > 0.5; // stretched across the screen
     // What is left over after the (squashed) ascenders and descenders.
     const xh = measurePhrase('x').xh;
     // (capitals have nothing above them and only the odd tail below)
-    const body = allCaps() ? 0.94 : 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
+    const body = allCaps() ? 0.985 : 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
     return sideways ? { width: H * 0.985, maxBand: W * body } : { width: W * 0.985, maxBand: H * body };
   }
 
@@ -478,7 +485,10 @@
       return { chars: placed, y: base };
     });
     // the area the phrase needs clear of loom threads (unstretched, y down)
-    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + Math.max(0.04, 0.83 - xh) * em * ra, down: total / 2 + 0.31 * em * ra };
+    // (Capitals fill their band, so the loom can come right up to it.)
+    const box = allCaps()
+      ? { hw: textW / 2 + em * 0.08, up: total / 2 + em * 0.004, down: total / 2 + em * 0.004 }
+      : { hw: textW / 2 + em * 0.25, up: total / 2 + Math.max(0.04, 0.83 - xh) * em * ra, down: total / 2 + 0.31 * em * ra };
     return { lines: out, extras, box, em, xhU, ra, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
 
@@ -570,7 +580,7 @@
   // ---------------------------------------------------------------- scene
   function rebuild({ fadeMs = 0, newWeave = true } = {}) {
     pageCache.clear(); // pages depend on the settings and the screen
-    const weave = newWeave || !scene ? buildWeave(state.seed) : scene.weave;
+    const weave = newWeave || !scene ? buildWeave(state.seed, scene && scene.weave.base) : scene.weave;
     // an existing message stays where it was woven; a new one goes mid-screen
     const frame = scene && scene.msg ? scene.msg.frame : currentFrame();
     const msg = state.revealed ? buildMessage(currentCard(), weave, scene && scene.msg ? scene.msg.rot : state.theta, frame) : null;
@@ -732,8 +742,20 @@
    * zoom where one scale of pages hands over to the next, both are drawn and
    * crossfaded.
    */
-  function paintLoom(c, V, seed, dir, alpha) {
+  function paintLoom(c, V0, weave, dir, alpha) {
     if (!S.loomOn || alpha <= 0) return;
+    // Work in the loom's own frame (see weave.base): the same view, as seen
+    // from a loom that has been moved, turned and scaled.
+    const B = weave.base, seed = weave.seed;
+    const cb = Math.cos(B.rot), sb = Math.sin(B.rot);
+    const ox = (V0.camX - B.x) / B.k, oy = (V0.camY - B.y) / B.k;
+    const V = {
+      ...V0,
+      rot: V0.rot - B.rot,
+      zoom: V0.zoom * B.k,
+      camX: MID + ox * cb - oy * sb,
+      camY: MID + ox * sb + oy * cb,
+    };
     const theme = THEMES[S.theme] || THEMES.linen;
     const k = V.px * V.zoom;
     // the screen's bounding box in image coordinates
@@ -754,7 +776,7 @@
       scales[0][1] = t;
       scales.push([L0 + (d > 0 ? 1 : -1), 1 - t]);
     }
-    const W = view.visW * 0.97, H = view.visH * 0.97;
+    const W = view.visW, H = view.visH;
     c.save();
     c.fillStyle = theme.ink;
     for (const [L, a] of scales) {
@@ -786,7 +808,7 @@
   }
 
   /** Paint one layer of the loom, optionally only inside one zone, and outside others. */
-  function fillLayer(c, V, seed, dir, alpha, inside, outside) {
+  function fillLayer(c, V, weave, dir, alpha, inside, outside) {
     if (alpha <= 0) return;
     c.save();
     if (inside) {
@@ -803,7 +825,7 @@
       addZone(c, V, z);
       c.clip('evenodd');
     }
-    paintLoom(c, V, seed, dir, alpha);
+    paintLoom(c, V, weave, dir, alpha);
     c.restore();
   }
 
@@ -813,13 +835,13 @@
    * what is entering or leaving a zone fades.
    */
   function drawSheet(c, sc, alpha, V, prev = null, e = 1) {
-    const seed = sc.weave.seed;
+    const weave = sc.weave;
     for (const dir of [0, 1]) {
       const now = clearZones(sc, dir), was = clearZones(prev, dir);
-      fillLayer(c, V, seed, dir, alpha, null, [...now, ...was]);
+      fillLayer(c, V, weave, dir, alpha, null, [...now, ...was]);
       if (!prev) continue;
-      for (const z of now) fillLayer(c, V, seed, dir, alpha * (1 - e), z, was); // being cleared
-      for (const z of was) fillLayer(c, V, seed, dir, alpha * e, z, now);       // growing back
+      for (const z of now) fillLayer(c, V, weave, dir, alpha * (1 - e), z, was); // being cleared
+      for (const z of was) fillLayer(c, V, weave, dir, alpha * e, z, now);       // growing back
     }
   }
 
@@ -978,10 +1000,13 @@
     if (state.locked || !scene) return;
     state.locked = currentCard();
     state.revealed = true;
-    // straighten the loom to the nearest right angle, then weave the message in
-    const square = Math.round(state.theta / Q) * Q;
-    if (Math.abs(square - state.theta) > 0.004) animateTo({ theta: square }, 300, () => commit());
-    else commit();
+    // The message is woven in upright, filling the screen, whatever angle the
+    // picture is at. The loom is laid out afresh around it, with the message
+    // as its centre page, so that zooming out shows the rest of the loom
+    // lined up with the message and running into it.
+    const frame = currentFrame();
+    const weave = buildWeave(scene.weave.seed, { x: frame.x, y: frame.y, rot: state.theta, k: frame.k });
+    setScene({ weave, msg: buildMessage(state.locked, weave, state.theta, frame) }, 900);
     try { if (S.haptics && navigator.vibrate) navigator.vibrate([12, 60, 12]); else { lastHapticAt = 0; haptic(); } } catch (_) { /* ignore */ }
     updateIndicator();
   }
