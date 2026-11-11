@@ -2,7 +2,7 @@
 
 A tilt-to-read card trick that runs as a static page (GitHub Pages).
 
-The screen shows a random weave of threads. When you tilt the phone and look along it from the charger end, the threads squash together into **You will pick**. Look from the side and they read **the seven of hearts**, or whichever card the spectator chose. You enter the card in secret while you "adjust" the image.
+The screen shows what looks like a random weave of threads. When you tilt the phone and look along it from the charger end, the threads squash together into **You will pick**. Look from the side and they read **the seven of hearts**, or whichever card the spectator chose. You enter the card in secret while you "adjust" the image.
 
 ## The routine
 
@@ -25,7 +25,7 @@ Other controls: drag with one finger to pan, and double-tap to recentre (the car
 - both phrases, and which edge each is read from (`{value}`, `{suit}`, and `|` for a line break)
 - suit order (CHaSeD or SHoCkeD), pinch sensitivity, gesture lock, haptics
 - indicator style: `7♥`, a code (`no. 07·2`), dots, or off
-- stretch, letter case, letter thickness, letter style (solid words or woven threads), number of decoy threads, layout, and theme
+- stretch, letter case, letter thickness, how many loose threads, layout, and theme
 - **live previews** that simulate the tilted view, so you can check the text reads before you perform
 
 Settings are saved on the device.
@@ -61,4 +61,9 @@ At a grazing angle (about 3–7° above the screen), foreshortening squashes the
 
 The font is Roboto (variable weight), bundled in `fonts/` under the SIL Open Font License, so the letters look the same on every device.
 
-Decoy warp and weft threads, diagonals and fringe add to the woven look. The words are drawn as live, transformed canvas text, so they stay sharp at any zoom and are redrawn the moment the card changes.
+There are no separate decoy lines; every line comes from the words:
+
+- **Loose threads.** Some ascenders and descenders (the stems of b, d, h, k, l, t, p, q) run on past the block for a random distance. A taller l is still an l when tilted, so this does not hurt the reading. **Reweave** changes which stems run on and how far, and shifts the two phrases.
+- **The letter k.** A font's k has diagonal arms that stretch into heavy wedges. It is redrawn as three threads (stem, arm, leg), each one stem wide.
+
+The words are drawn as live, transformed canvas text, so they stay sharp at any zoom and are redrawn the moment the card changes.

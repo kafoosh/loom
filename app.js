@@ -1,14 +1,14 @@
 /*
  * loom — a tilt-to-read card revelation.
  *
- * The picture is a "weave" of threads drawn on a 1000 × 1000 unit canvas.
- * Two hidden messages are woven in:
- *   – Each message is rasterised as ordinary text, then sampled column by
- *     column on a fixed thread grid. Every run of ink becomes one thread,
- *     stretched S times along the reading axis. Viewed at a grazing angle
- *     from the right edge of the phone, the foreshortening squashes the
- *     threads back into letters.
- *   – Decoy threads (long warp/weft lines, diagonals, fringe) hide the text.
+ * The picture is two phrases drawn on a 1000 × 1000 unit canvas, built the
+ * way classic tilt-to-read images are:
+ *   – Each phrase is small, light, mostly lowercase type, stretched ~17× along
+ *     one axis only (phrase 1 vertically, phrase 2 horizontally) and laid over
+ *     the other. Viewed at a grazing angle along that axis, foreshortening
+ *     squashes it back into letters.
+ *   – There are no separate decoy lines. The loose threads are letter stems
+ *     (ascenders and descenders) that run on past the block.
  *
  * Secret input:
  *   – Pinch: each `pinchStep` change of finger distance steps the value.
@@ -25,7 +25,6 @@
   const CLOTH = 820;
   // Bundled variable font (fonts/), so the letters look the same on every device.
   const FONT = '"Loom Thread", "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif';
-  const MASK_RES = 2; // mask pixels per (unstretched) image unit
   const MAX_STRETCH = 40;
 
   const SUITS = {
@@ -72,15 +71,13 @@
     indicator: 'card',
     startCard: 'random',
     stretch: 17,
-    pitch: 6,
     density: 1,
     layout: 'overlap',
-    letters: 'solid',
-    weight: 400,
+    weight: 300,
     theme: 'linen',
     holdOrientation: true,
   };
-  const STORE_KEY = 'loom.settings.v4';
+  const STORE_KEY = 'loom.settings.v5';
 
   // ---------------------------------------------------------------- utils
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -159,123 +156,62 @@
   }
 
   // ---------------------------------------------------------------- weave
-  function clipToSquare(px, py, dx, dy, lo, hi) {
-    let t0 = -Infinity, t1 = Infinity;
-    for (const [p, d] of [[px, dx], [py, dy]]) {
-      if (Math.abs(d) < 1e-9) continue;
-      const a = (lo - p) / d, b = (hi - p) / d;
-      t0 = Math.max(t0, Math.min(a, b));
-      t1 = Math.min(t1, Math.max(a, b));
-    }
-    return [t0, t1];
-  }
-
+  /**
+   * There are no separate decoy lines. A "weave" is only the random numbers
+   * that place the two phrases and decide which letter stems run on as loose
+   * threads, so Reweave changes all of those at once.
+   */
   function buildWeave(seed) {
     const r = mulberry32(seed);
-    const p = S.pitch;
-    const dens = S.density;
-    const half = Math.round(CLOTH / 2 / p) * p;
-    const lo = MID - half, hi = MID + half;
-    const span = hi - lo;
-    const snap = (v) => MID + Math.round((v - MID) / p) * p;
-    const thin = p * 0.34, mid = p * 0.5;
-
-    const mk = () => [new Path2D(), new Path2D()]; // [thin, mid]
-    const L = { dU: mk(), hA: mk(), wA: mk(), hB: mk(), wB: mk(), dO: mk() };
-    const seg = (path, x0, y0, x1, y1) => { path.moveTo(x0, y0); path.lineTo(x1, y1); };
-    const pick = (a, b) => (r() < 0.5 ? a : b);
-    const overhang = () => (r() < 0.3 ? 30 + r() * 150 : 3 + r() * 16);
-
-    // selvedge: the four edge threads
-    seg(L.wA[1], lo, lo - overhang(), lo, hi + overhang());
-    seg(L.wB[1], hi, lo - overhang(), hi, hi + overhang());
-    seg(L.hA[1], lo - overhang(), lo, hi + overhang(), lo);
-    seg(L.hB[1], lo - overhang(), hi, hi + overhang(), hi);
-
-    // long warp (vertical) and weft (horizontal) threads, on the grid
-    const nLong = Math.round((7 + r() * 5) * dens);
-    for (let i = 0; i < nLong; i++) {
-      const x = snap(lo + p + r() * (span - 2 * p));
-      seg(pick(L.wA, L.wB)[r() < 0.6 ? 0 : 1], x, lo - overhang(), x, hi + overhang());
-      const y = snap(lo + p + r() * (span - 2 * p));
-      seg(pick(L.hA, L.hB)[r() < 0.6 ? 0 : 1], lo - overhang(), y, hi + overhang(), y);
-    }
-
-    // fringe: short loose threads along all four edges
-    const fr = 0.3 * Math.min(1.4, dens);
-    for (let v = lo; v <= hi + 0.01; v += p) {
-      if (r() < fr) seg(pick(L.wA, L.wB)[0], v, lo - 6 - r() * 60, v, lo + r() * 12);
-      if (r() < fr) seg(pick(L.wA, L.wB)[0], v, hi + 6 + r() * 60, v, hi - r() * 12);
-      if (r() < fr) seg(pick(L.hA, L.hB)[0], lo - 6 - r() * 60, v, lo + r() * 12, v);
-      if (r() < fr) seg(pick(L.hA, L.hB)[0], hi + 6 + r() * 60, v, hi - r() * 12, v);
-    }
-
-    // diagonals, kept well away from the two reading axes
-    const nDiag = Math.round((8 + r() * 6) * dens);
-    for (let i = 0; i < nDiag; i++) {
-      const deg = 27 + r() * 36 + (r() < 0.5 ? 90 : 0);
-      const a = (deg * Math.PI) / 180;
-      const dx = Math.cos(a), dy = Math.sin(a);
-      const px = lo + r() * span, py = lo + r() * span;
-      const [t0, t1] = clipToSquare(px, py, dx, dy, lo - 4, hi + 4);
-      if (!(t1 > t0)) continue;
-      const len = t1 - t0;
-      const ta = t0 + (r() < 0.55 ? 0 : r() * 0.35 * len);
-      const tb = t1 - (r() < 0.55 ? 0 : r() * 0.35 * len);
-      seg(r() < 0.6 ? L.dO[r() < 0.5 ? 0 : 1] : L.dU[r() < 0.5 ? 0 : 1],
-        px + dx * ta, py + dy * ta, px + dx * tb, py + dy * tb);
-    }
-
-    const layers = (pair) => [{ path: pair[0], w: thin }, { path: pair[1], w: mid }];
-    return {
-      under: [...layers(L.dU), ...layers(L.hA), ...layers(L.wA), ...layers(L.hB), ...layers(L.wB)],
-      over: layers(L.dO),
-      // message placement jitter, so reweaving moves everything
-      jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2 },
-    };
+    return { seed, jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() } };
   }
 
   // ---------------------------------------------------------------- messages
   const maskCanvas = document.createElement('canvas');
   const mctx = maskCanvas.getContext('2d', { willReadFrequently: true });
 
-  function lineCandidates(text) {
-    const t = text.replace(/[ \t]+/g, ' ').trim();
-    if (!t) return [];
-    if (/[|\n]/.test(t)) return [t.split(/\s*[|\n]\s*/).filter(Boolean)];
-    const words = t.split(' ');
-    const out = [[t]];
-    for (let i = 1; i < words.length; i++) {
-      out.push([words.slice(0, i).join(' '), words.slice(i).join(' ')]);
-    }
-    return out;
-  }
+  // Letters whose stem can run on as a loose thread and still be the same
+  // letter (a taller l is still an l; a taller n would turn into an h).
+  const UP_STEMS = 'bdhklt';
+  const DOWN_STEMS = 'pq';
+  const stemCache = new Map();
 
   /**
-   * Size `text` the way tilt-to-read posters are made: set it as wide as the
-   * box allows, then stretch it along the reading axis until it fills the
-   * box's length. Each phrase gets its own stretch (never less than minS).
+   * Find the stem of a letter in the font itself: its left/right edges and
+   * where it ends (all in ems; y is height above the baseline).
+   * end = 'top' for ascenders, 'bottom' for descenders.
    */
-  function fitText(text, budgetW, budgetL, minS, maxS) {
-    mctx.font = `${S.weight} 100px ${FONT}`;
-    let best = null;
-    for (const lines of lineCandidates(text)) {
-      let maxW = 0, asc = 0, desc = 0;
-      for (const ln of lines) {
-        const m = mctx.measureText(ln);
-        maxW = Math.max(maxW, m.width);
-        asc = Math.max(asc, m.actualBoundingBoxAscent || 72);
-        desc = Math.max(desc, m.actualBoundingBoxDescent || 0);
+  function measureStem(ch, end) {
+    const key = `${S.weight}|${ch}|${end}`;
+    if (stemCache.has(key)) return stemCache.get(key);
+    const size = 200, ox = 60, base = 240, W = 320, H = 340;
+    maskCanvas.width = W;
+    maskCanvas.height = H;
+    mctx.clearRect(0, 0, W, H);
+    mctx.fillStyle = '#000';
+    mctx.textAlign = 'left';
+    mctx.textBaseline = 'alphabetic';
+    mctx.font = `${S.weight} ${size}px ${FONT}`;
+    mctx.fillText(ch, ox, base);
+    const data = mctx.getImageData(0, 0, W, H).data;
+    const inked = (x, y) => data[(y * W + x) * 4 + 3] > 127;
+    const rowHasInk = (y) => { for (let x = 0; x < W; x++) if (inked(x, y)) return true; return false; };
+    let y = -1;
+    if (end === 'top') { for (let yy = 0; yy < H; yy++) if (rowHasInk(yy)) { y = yy; break; } }
+    else { for (let yy = H - 1; yy >= 0; yy--) if (rowHasInk(yy)) { y = yy; break; } }
+    let out = null;
+    if (y >= 0) {
+      const probe = end === 'top' ? y + 8 : y - 8; // a little inside the stem's cut end
+      let x0 = -1, x1 = -1;
+      for (let x = 0; x < W; x++) {
+        if (inked(x, probe)) { if (x0 < 0) x0 = x; x1 = x + 1; } else if (x0 >= 0) break;
       }
-      const lineH = asc + desc;
-      const gap = lineH * 0.45;
-      const total = lines.length * lineH + (lines.length - 1) * gap;
-      const k = Math.min(budgetW / maxW, budgetL / (minS * total));
-      const St = clamp(budgetL / (total * k), minS, maxS);
-      const score = k * (1 - 0.06 * (lines.length - 1)); // prefer fewer lines
-      if (!best || score > best.score) best = { lines, k, St, maxW, asc, lineH, gap, total, score };
+      if (x0 >= 0) {
+        out = { x0: (x0 - ox) / size, x1: (x1 - ox) / size, y: (base - (end === 'top' ? y : y + 1)) / size };
+      }
     }
-    return best;
+    stemCache.set(key, out);
+    return out;
   }
 
   /**
@@ -286,16 +222,24 @@
    * ascenders and descenders hang out of it as loose threads. Where a curved
    * stroke turns horizontal (tops of n, o, e, a…) the stretch makes it S×
    * thicker, which gives the fat tapered spikes at the top and bottom.
+   *
+   * The extra lines all grow out of the words: some ascenders and descenders
+   * run on past the block for a random distance. Returns glyph positions plus
+   * `extras`, a Path2D (in the phrase's own unstretched coordinates) holding
+   * those run-on stems and the redrawn k's.
    */
-  function layoutSolid(text, budgetW, budgetL) {
+  function layoutSolid(text, budgetW, budgetL, rnd, bandFrac) {
     const t = text.replace(/[ \t]+/g, ' ').trim();
     if (!t) return null;
     const lines = t.split(/\s*[|\n]\s*/).filter(Boolean);
     const n = lines.length;
-    mctx.font = `${S.weight} 100px ${FONT}`;
+    const setFont = () => { mctx.font = `${S.weight} 100px ${FONT}`; };
+    setFont();
     const xh = (mctx.measureText('x').actualBoundingBoxAscent || 52) / 100; // of the em
+    const kRight = {};
+    for (const ch of 'kK') kRight[ch] = (mctx.measureText(ch).actualBoundingBoxRight || 50) / 100;
     const lineGap = 0.8;                       // gap between lines, in x-heights
-    const band = budgetL * 0.8;                // stretched length of all x-height bands
+    const band = budgetL * bandFrac;           // stretched length of all x-height bands
     const bandLine = band / (n + (n - 1) * lineGap);
     const adv = lines.map((ln) => [...ln].map((ch) => mctx.measureText(ch).width / 100));
     const natW = Math.max(...adv.map((a) => a.reduce((x, v) => x + v, 0)));
@@ -305,6 +249,32 @@
     const xhU = (bandLine / St);               // x-height in unstretched units
     const pitch = xhU * (1 + lineGap);
     const total = n * xhU + (n - 1) * xhU * lineGap;
+
+    const extras = new Path2D();
+    // Every shape is wound the same way, so overlapping pieces add up
+    // instead of cancelling under the non-zero fill rule.
+    const quad = (pts) => {
+      let area = 0;
+      for (let k = 0; k < pts.length; k++) {
+        const a = pts[k], b = pts[(k + 1) % pts.length];
+        area += a[0] * b[1] - b[0] * a[1];
+      }
+      if (area < 0) pts = pts.slice().reverse();
+      extras.moveTo(pts[0][0], pts[0][1]);
+      for (let k = 1; k < pts.length; k++) extras.lineTo(pts[k][0], pts[k][1]);
+      extras.closePath();
+    };
+    const rect = (x0, y0, x1, y1) => quad([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+    const dens = S.density;
+    const pRun = clamp(0.7 * dens, 0, 1);
+    // how far a run-on stem goes, in stretched units
+    const runLength = () => {
+      const v = rnd();
+      if (v < 0.4) return bandLine * (0.04 + rnd() * 0.22);
+      if (v < 0.82) return bandLine * (0.26 + rnd() * 0.5);
+      return bandLine * (0.9 + rnd() * 1.1); // a few run right off the cloth
+    };
+
     let textW = 0;
     const out = lines.map((ln, i) => {
       const chars = [...ln];
@@ -314,105 +284,61 @@
         ? clamp((budgetW * 0.85 - w) / (chars.length - 1), 0, 0.1 * em) : 0;
       const full = w + track * (chars.length - 1);
       textW = Math.max(textW, full);
+      const base = -total / 2 + i * pitch + xhU;   // baseline (y grows downwards)
       let x = -full / 2;
-      const placed = chars.map((ch, ci) => {
-        const o = { ch, x };
-        x += adv[i][ci] * em + track;
-        return o;
+      const placed = [];
+      chars.forEach((ch, ci) => {
+        const a = adv[i][ci] * em;
+        const X = (ex) => x + ex * em, Y = (ey) => base - ey * em;
+        if (ch === ' ') {
+          // above 100%, some word gaps get a stray thread right through the block
+          if (n === 1 && dens > 1 && rnd() < (dens - 1) * 0.8) {
+            const l = measureStem('l', 'top');
+            const hw = l ? (l.x1 - l.x0) * em / 2 : em * 0.045;
+            const cx = x + a / 2;
+            rect(cx - hw, base - xhU - (bandLine * (0.6 + rnd() * 1.4)) / St,
+              cx + hw, base + (bandLine * (0.5 + rnd() * 1.3)) / St);
+          }
+        } else if (ch === 'k' || ch === 'K') {
+          // The font's k has diagonals that stretch into heavy wedges. Draw it
+          // as three threads instead: stem, arm and leg, each one stem wide.
+          const st = measureStem(ch, 'top');
+          if (!st) placed.push({ ch, x });
+          else {
+            const sw = st.x1 - st.x0, wk = sw * 0.95;
+            const top = ch === 'k' ? xh : st.y;
+            const a0 = [st.x1 - sw * 0.5, top * 0.3];
+            const a1 = [kRight[ch] * 0.97 - wk / 2, top];
+            const f = 0.36;
+            const P = [a0[0] + (a1[0] - a0[0]) * f, a0[1] + (a1[1] - a0[1]) * f];
+            const l1 = [kRight[ch] - wk / 2, 0];
+            const para = (p, q) => quad([
+              [X(p[0] - wk / 2), Y(p[1])], [X(p[0] + wk / 2), Y(p[1])],
+              [X(q[0] + wk / 2), Y(q[1])], [X(q[0] - wk / 2), Y(q[1])],
+            ]);
+            rect(X(st.x0), Y(0), X(st.x1), Y(st.y));
+            para(a0, a1);
+            para(P, l1);
+          }
+        } else placed.push({ ch, x });
+
+        // run some ascenders / descenders on, away from any neighbouring line
+        if (i === 0 && UP_STEMS.includes(ch) && rnd() < pRun) {
+          const st = measureStem(ch, 'top');
+          if (st) rect(X(st.x0), Y(st.y) + em * 0.02, X(st.x1), Y(st.y) - runLength() / St);
+        }
+        if (i === n - 1 && DOWN_STEMS.includes(ch) && rnd() < pRun) {
+          const st = measureStem(ch, 'bottom');
+          if (st) rect(X(st.x0), Y(st.y) - em * 0.02, X(st.x1), Y(st.y) + runLength() / St);
+        }
+        x += a + track;
       });
-      return { chars: placed.filter((o) => o.ch !== ' '), y: -total / 2 + i * pitch + xhU };
+      return { chars: placed, y: base };
     });
-    return { lines: out, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
-  }
-
-  /**
-   * Weave `text` so it can be read from `edgeName`; c is the band centre in
-   * image units.
-   *  – 'solid' letters: the real glyphs, stretched S× along the reading axis
-   *    (for the default bottom edge that is a plain vertical stretch).
-   *  – 'threads' letters: the glyphs sampled into parallel threads (added to
-   *    `path`).
-   */
-  function weaveText(path, glyphs, text, edgeName, c, budgetW, budgetL) {
-    const edge = EDGES[edgeName];
-    if (S.letters !== 'threads') {
-      const g = layoutSolid(text, budgetW, budgetL);
-      if (!g) return null;
-      glyphs.push({ lines: g.lines, font: g.font, St: g.St, ox: c[0], oy: c[1], U: edge.U, R: edge.R });
-      return { textW: g.textW, bandLen: g.bandLen, lines: g.text, count: 0, St: g.St, edge: edgeName };
-    }
-    const p = S.pitch;
-    const w = p * 0.6;
-    const f = fitText(text, budgetW, budgetL, S.stretch, MAX_STRETCH);
-    if (!f) return null;
-    const St = f.St;
-
-    const k = f.k;
-    const textW = f.maxW * k;    // along R, image units
-    const bandH = f.total * k;   // along U, unstretched units
-    const pad = 4;
-    const mw = Math.ceil(textW * MASK_RES) + pad * 2;
-    const mh = Math.ceil(bandH * MASK_RES) + pad * 2;
-    maskCanvas.width = mw;
-    maskCanvas.height = mh;
-    mctx.clearRect(0, 0, mw, mh);
-    mctx.fillStyle = '#000';
-    mctx.textAlign = 'center';
-    mctx.textBaseline = 'alphabetic';
-    mctx.font = `${S.weight} ${100 * k * MASK_RES}px ${FONT}`;
-    f.lines.forEach((ln, i) => {
-      const y = pad + (i * (f.lineH + f.gap) + f.asc) * k * MASK_RES;
-      mctx.fillText(ln, mw / 2, y);
-    });
-    const data = mctx.getImageData(0, 0, mw, mh).data;
-
-    // Snap the band centre onto the thread grid along R.
-    const [Ux, Uy] = edge.U, [Rx, Ry] = edge.R;
-    const cr = (c[0] - MID) * Rx + (c[1] - MID) * Ry;
-    const cu = (c[0] - MID) * Ux + (c[1] - MID) * Uy;
-    const crSnap = Math.round(cr / p) * p;
-    const ox = MID + crSnap * Rx + cu * Ux;
-    const oy = MID + crSnap * Ry + cu * Uy;
-
-    const halfWin = (p / 2) * MASK_RES;
-    const thresh = 0.42 * 255;
-    const kMax = Math.ceil(textW / 2 / p) + 1;
-    let count = 0;
-    for (let ki = -kMax; ki <= kMax; ki++) {
-      const u = ki * p;
-      const mx = pad + (u + textW / 2) * MASK_RES;
-      const x0 = Math.max(0, Math.floor(mx - halfWin));
-      const x1 = Math.min(mw, Math.ceil(mx + halfWin));
-      if (x1 <= x0) continue;
-      const n = x1 - x0;
-      let runStart = -1;
-      for (let y = 0; y <= mh; y++) {
-        let on = false;
-        if (y < mh) {
-          let sum = 0;
-          const row = y * mw * 4 + 3;
-          for (let x = x0; x < x1; x++) sum += data[row + x * 4];
-          on = sum / n >= thresh;
-        }
-        if (on && runStart < 0) runStart = y;
-        else if (!on && runStart >= 0) {
-          // rows [runStart, y) → offsets along U (stretched)
-          const va = (runStart - pad) / MASK_RES, vb = (y - pad) / MASK_RES;
-          let ta = (bandH / 2 - va) * St, tb = (bandH / 2 - vb) * St;
-          if (ta - tb > w) { ta -= w / 2; tb += w / 2; } else { const m = (ta + tb) / 2; ta = tb = m; }
-          path.moveTo(ox + u * Rx + ta * Ux, oy + u * Ry + ta * Uy);
-          path.lineTo(ox + u * Rx + tb * Ux, oy + u * Ry + tb * Uy);
-          count++;
-          runStart = -1;
-        }
-      }
-    }
-    return { textW, bandLen: bandH * St, lines: f.lines, count, St, edge: edgeName };
+    return { lines: out, extras, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
 
   function buildMessage(card, weave, q) {
-    const vPath = new Path2D(); // warp (vertical threads)
-    const hPath = new Path2D(); // weft (horizontal threads)
     const msgs = [
       { text: applyCase(S.phraseA, true), edge: S.edgeA },
       { text: applyCase(cardPhrase(card), false), edge: S.edgeB },
@@ -444,7 +370,7 @@
       // Classic look: both messages cross in the centre.
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
-        return { c: at([0, 0], j.u * 24 * (i ? -1 : 1), j.r * 14, e), bw: ext(e.R) * 0.9, bl: ext(e.U) * 0.84 };
+        return { c: at([0, 0], j.u * 34 * (i ? -1 : 1), j.r * 26, e), bw: ext(e.R) * 0.9, bl: ext(e.U) * 0.84 };
       });
     } else {
       // Split: each message gets its own half of the cloth, so the two
@@ -460,9 +386,16 @@
       });
     }
     const glyphs = [];
-    const info = msgs.map((m, i) => weaveText(axisOf(m.edge) === 'v' ? vPath : hPath, glyphs,
-      m.text, m.edge, regions[i].c, regions[i].bw, regions[i].bl));
-    return { v: vPath, h: hPath, glyphs, q, key: cardKey(card), info, card };
+    const info = msgs.map((m, i) => {
+      const e = EDGES[m.edge];
+      const rnd = mulberry32((weave.seed + 0x9e3779b9 * (i + 1)) >>> 0);
+      const bandFrac = 0.76 + 0.08 * (i ? 1 - j.band : j.band);
+      const g = layoutSolid(m.text, regions[i].bw, regions[i].bl, rnd, bandFrac);
+      if (!g) return null;
+      glyphs.push({ lines: g.lines, extras: g.extras, font: g.font, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
+      return { textW: g.textW, bandLen: g.bandLen, lines: g.text, St: g.St, edge: m.edge };
+    });
+    return { glyphs, q, key: cardKey(card), info, card };
   }
 
   // ---------------------------------------------------------------- scene
@@ -531,64 +464,26 @@
 
   function drawScene(c, sc, alpha, xf) {
     const theme = THEMES[S.theme] || THEMES.linen;
-    const pad = S.pitch * 0.22;
-    const msgW = S.pitch * 0.6;
     c.save();
     xf(c);
     c.globalAlpha = alpha;
-    c.lineCap = 'round';
-    const stroke = (path, w, halo = true) => {
-      if (halo) {
-        c.strokeStyle = theme.bg;
-        c.lineWidth = w + 2 * pad;
-        c.stroke(path);
-      }
-      c.strokeStyle = theme.ink;
-      c.lineWidth = w;
-      c.stroke(path);
-    };
-    for (const L of sc.weave.under) stroke(L.path, L.w);
-
-    c.save();
     c.translate(MID, MID);
     c.rotate(-sc.msg.q * Q);
     c.translate(-MID, -MID);
-    // halos for both message layers first, then ink, so the two messages
-    // never cut each other (only the decoys underneath get "woven").
-    c.strokeStyle = theme.bg;
-    c.lineWidth = msgW + 2 * pad;
-    c.stroke(sc.msg.h);
-    c.stroke(sc.msg.v);
-    c.strokeStyle = theme.ink;
-    c.lineWidth = msgW;
-    c.stroke(sc.msg.h);
-    c.stroke(sc.msg.v);
-    // Solid stretched words. Halos for every phrase first, then the ink, so
-    // the crossing phrases never cut into each other.
-    for (const pass of ['halo', 'ink']) {
-      for (const g of sc.msg.glyphs) {
-        c.save();
-        // local x → reading direction R; local y (down the glyph) → −U, ×St
-        c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
-        c.font = g.font;
-        c.textAlign = 'left';
-        c.textBaseline = 'alphabetic';
-        c.lineJoin = 'round';
-        c.lineWidth = pad * 0.9;
-        c.strokeStyle = theme.bg;
-        c.fillStyle = theme.ink;
-        for (const ln of g.lines) {
-          for (const o of ln.chars) {
-            if (pass === 'halo') c.strokeText(o.ch, o.x, ln.y);
-            else c.fillText(o.ch, o.x, ln.y);
-          }
-        }
-        c.restore();
+    c.fillStyle = theme.ink;
+    for (const g of sc.msg.glyphs) {
+      c.save();
+      // local x → reading direction R; local y (down the glyph) → −U, ×St
+      c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
+      c.font = g.font;
+      c.textAlign = 'left';
+      c.textBaseline = 'alphabetic';
+      for (const ln of g.lines) {
+        for (const o of ln.chars) c.fillText(o.ch, o.x, ln.y);
       }
+      c.fill(g.extras); // run-on stems and the redrawn k's
+      c.restore();
     }
-    c.restore();
-
-    for (const L of sc.weave.over) stroke(L.path, L.w);
     c.restore();
   }
 
@@ -935,7 +830,6 @@
   }
   function updateOutputs() {
     form.elements.stretchOut.value = `${(+S.stretch).toFixed(0)}× · view at ~${(Math.asin(1 / S.stretch) * 180 / Math.PI).toFixed(1)}°`;
-    form.elements.pitchOut.value = (+S.pitch).toFixed(1);
     form.elements.densityOut.value = `${Math.round(S.density * 100)}%`;
     form.elements.weightOut.value = `${Math.round(S.weight)}`;
     form.elements.pinchStepOut.value = `${Math.round((S.pinchStep - 1) * 100)}%`;
@@ -1093,6 +987,6 @@
       .catch(() => {})
       .then(init);
     // If the font arrives late (slow connection), reweave the words with it.
-    document.fonts.ready.then(() => { if (scene) rebuild({ newWeave: false }); });
+    document.fonts.ready.then(() => { stemCache.clear(); if (scene) rebuild({ newWeave: false }); });
   } else init();
 })();
