@@ -71,6 +71,9 @@ html, body {
   padding-left: max(18px, env(safe-area-inset-left));
   padding-right: max(18px, env(safe-area-inset-right));
 }
+/* the loom fades out behind the header and footer so their text stays legible */
+#top { background: linear-gradient(to bottom, var(--bg) 45%, transparent); }
+#bottom { background: linear-gradient(to top, var(--bg) 50%, transparent); }
 #top {
   top: 0;
   padding-top: max(12px, env(safe-area-inset-top));
@@ -102,7 +105,8 @@ html, body {
   align-items: center;
   gap: 8px;
   border: 1px solid var(--line);
-  background: var(--chip);
+  /* opaque, so loom threads do not show through the button */
+  background: linear-gradient(var(--chip), var(--chip)), var(--bg);
   color: var(--ink);
   font: inherit;
   font-size: 14px;
@@ -120,8 +124,12 @@ html, body {
   color: var(--faint);
   min-width: 3em;
   text-align: right;
+  /* a soft halo keeps it legible where a thread passes behind it */
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 6px var(--bg);
   white-space: nowrap;
 }
+/* locked in: a hairline under the card */
+#ind.locked { border-bottom: 1px solid currentColor; padding-bottom: 3px; }
 #ind .dots { display: inline-flex; gap: 4px; align-items: center; }
 #ind .dots i {
   display: block;
