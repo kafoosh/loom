@@ -57,7 +57,7 @@
   };
 
   const DEFAULTS = {
-    phraseA: 'YOU WILL PICK',
+    phraseA: 'The card you chose was',
     phraseB: 'THE {value} OF {suit}',
     edgeA: 'bottom',
     edgeB: 'left',
@@ -101,7 +101,12 @@
   function loadSettings() {
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
+      if (raw) {
+        const saved = JSON.parse(raw);
+        // carry the old default phrase forward to the current one
+        if (/^you will pick$/i.test((saved.phraseA || '').trim())) delete saved.phraseA;
+        return { ...DEFAULTS, ...saved };
+      }
     } catch (_) { /* storage unavailable */ }
     return { ...DEFAULTS };
   }
@@ -281,7 +286,7 @@
       const w = adv[i].reduce((x, v) => x + v, 0) * em;
       // short phrases: open the letter-spacing a little so the block is not a sliver
       const track = chars.length > 1
-        ? clamp((budgetW * 0.85 - w) / (chars.length - 1), 0, 0.1 * em) : 0;
+        ? clamp((budgetW * 0.97 - w) / (chars.length - 1), 0, 0.13 * em) : 0;
       const full = w + track * (chars.length - 1);
       textW = Math.max(textW, full);
       const base = -total / 2 + i * pitch + xhU;   // baseline (y grows downwards)
@@ -367,10 +372,12 @@
         return { c: at([s * A.U[0], s * A.U[1]], j.u * 10, j.r * 8, e), bw: ext(e.R) * 0.9, bl };
       });
     } else if (S.layout === 'overlap') {
-      // Classic look: both messages cross in the centre.
+      // Classic look: both phrases fill the same square and cross in it, so
+      // the stems of one run the full length of the other.
+      const side = Math.min(ext(A.U), ext(A.R)) * 0.72;
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
-        return { c: at([0, 0], j.u * 34 * (i ? -1 : 1), j.r * 26, e), bw: ext(e.R) * 0.9, bl: ext(e.U) * 0.84 };
+        return { c: at([0, 0], j.u * 22 * (i ? -1 : 1), j.r * 16, e), bw: side, bl: side, bf: 0.9 };
       });
     } else {
       // Split: each message gets its own half of the cloth, so the two
@@ -389,7 +396,7 @@
     const info = msgs.map((m, i) => {
       const e = EDGES[m.edge];
       const rnd = mulberry32((weave.seed + 0x9e3779b9 * (i + 1)) >>> 0);
-      const bandFrac = 0.76 + 0.08 * (i ? 1 - j.band : j.band);
+      const bandFrac = (regions[i].bf || 0.76) + 0.08 * (i ? 1 - j.band : j.band);
       const g = layoutSolid(m.text, regions[i].bw, regions[i].bl, rnd, bandFrac);
       if (!g) return null;
       glyphs.push({ lines: g.lines, extras: g.extras, font: g.font, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
@@ -907,7 +914,7 @@
     const theme = THEMES[S.theme] || THEMES.linen;
     c.fillStyle = theme.bg;
     c.fillRect(0, 0, size, size);
-    const k = size / (CLOTH + 60);
+    const k = size / (CLOTH + 280); // wide enough for capitals and ascenders
     drawScene(c, scene, 1, (cc) => {
       cc.setTransform(1, 0, 0, 1, 0, 0);
       cc.translate(size / 2, size / 2);

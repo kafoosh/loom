@@ -2,7 +2,7 @@
 
 A tilt-to-read card trick that runs as a static page (GitHub Pages).
 
-The screen shows what looks like a random weave of threads. When you tilt the phone and look along it from the charger end, the threads squash together into **You will pick**. Look from the side and they read **the seven of hearts**, or whichever card the spectator chose. You enter the card in secret while you "adjust" the image.
+The screen shows what looks like a random weave of threads. When you tilt the phone and look along it from the charger end, the threads squash together into **The card you chose was**. Look from the side and they read **the seven of hearts**, or whichever card the spectator chose. You enter the card in secret while you "adjust" the image.
 
 ## The routine
 
@@ -14,7 +14,7 @@ The screen shows what looks like a random weave of threads. When you tilt the ph
 
    Each step gives a haptic tick, and the faint indicator in the bottom-right corner shows the current card (e.g. `7♥`).
 4. Let go. The image snaps square and the hidden message is rewoven for the new card.
-5. Tilt from the bottom edge: **You will pick**. Turn the phone and tilt from the left edge: **the seven of hearts**.
+5. Tilt from the bottom edge: **The card you chose was**. Turn the phone and tilt from the left edge: **the seven of hearts**.
 
 Other controls: drag with one finger to pan, and double-tap to recentre (the card stays the same).
 
