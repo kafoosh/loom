@@ -733,21 +733,40 @@
    * screen, along its reading direction and along its stretch axis (layout
    * units from its centre). Letters outside are skipped.
    */
-  function drawGlyphs(c, g, vis) {
+  function drawGlyphs(c, g, vis, style) {
     c.save();
     glyphTransform(c, g);
-    c.font = g.font;
+    c.font = style ? `${style.weight} ${g.em}px ${FONT}` : g.font;
     c.textAlign = 'left';
     c.textBaseline = 'alphabetic';
+    const alpha0 = c.globalAlpha;
+    if (style) {
+      c.lineWidth = style.outline * g.em;
+      c.lineJoin = 'round';
+      c.strokeStyle = c.fillStyle;
+    }
     const onScreen = !vis || (vis[2] < g.box.up * g.St && vis[3] > -g.box.down * g.St);
     for (const ln of g.lines) {
       if (!onScreen) break;
       const chars = vis ? ln.chars.filter((o) => !(o.x > vis[1] || o.x + g.em * 1.2 < vis[0])) : ln.chars;
       if (!chars.length) continue;
       if (!(g.ra < 1) || ln.plain) {
-        for (const o of chars) c.fillText(o.ch, o.x, ln.y);
+        if (!style) {
+          for (const o of chars) c.fillText(o.ch, o.x, ln.y);
+          continue;
+        }
+        // thinned lettering: a (fading) fill, and/or just its outline
+        if (style.fill > 0.01) {
+          c.globalAlpha = alpha0 * style.fill;
+          for (const o of chars) c.fillText(o.ch, o.x, ln.y);
+        }
+        if (style.outline > 0) {
+          c.globalAlpha = alpha0;
+          for (const o of chars) c.strokeText(o.ch, o.x, ln.y);
+        }
         continue;
       }
+      if (style) c.globalAlpha = alpha0 * style.alpha; // (sliced lettering just fades)
       // The letters are drawn in three slices: the bodies (baseline to
       // x-line) at full stretch, and everything above and below squashed
       // towards them. Stems are vertical, so the slices join up.
@@ -771,6 +790,7 @@
         c.restore();
       }
     }
+    if (style) c.globalAlpha = alpha0 * style.alpha;
     c.fill(g.extras); // run-on stems and the redrawn k's
     c.restore();
   }
@@ -781,6 +801,57 @@
    * zoom where one scale of pages hands over to the next, both are drawn and
    * crossfaded.
    */
+  /** How thick a stem is at a font weight, in ems (measured from the font). */
+  const stemWidths = new Map();
+  function stemWidth(weight) {
+    if (stemWidths.has(weight)) return stemWidths.get(weight);
+    const size = 400, W = 300, H = 60;
+    maskCanvas.width = W;
+    maskCanvas.height = H;
+    mctx.clearRect(0, 0, W, H);
+    mctx.fillStyle = '#000';
+    mctx.textAlign = 'left';
+    mctx.textBaseline = 'alphabetic';
+    mctx.font = `${weight} ${size}px ${FONT}`;
+    mctx.fillText('I', 60, 180); // a row through the middle of the stem
+    const data = mctx.getImageData(0, 30, W, 1).data;
+    let sum = 0;
+    for (let x = 0; x < W; x++) sum += data[x * 4 + 3];
+    const w = Math.max(0.01, sum / 255 / size);
+    stemWidths.set(weight, w);
+    return w;
+  }
+  /**
+   * How to draw lettering that is 2^u its normal size on screen so that its
+   * threads come out `thick` (0…1) as thick as normal.
+   *  – As far as it goes, a lighter cut of the font (the bundled font is
+   *    variable, 100–900).
+   *  – Past the lightest cut, the letters are drawn as outlines instead of
+   *    being filled: each thread splits into two finer ones along its edges,
+   *    and those can be made as fine as needed. So a thread stays black and
+   *    thins away, rather than turning grey.
+   * Returns { weight, fill (opacity of the filled letter), outline (line
+   * width in ems), alpha (plain opacity, for lettering that cannot be
+   * outlined) }.
+   */
+  function threadStyle(thick, u) {
+    const f = Math.pow(2, u);
+    const ratio = thick / f;                       // stroke weight wanted, relative to normal
+    const base = clamp(Math.round(S.weight), 100, 900);
+    const sBase = stemWidth(base), sMin = stemWidth(100);
+    const floor = base <= 100 ? 1 : Math.min(1, sMin / sBase); // the thinnest the font can do
+    if (ratio >= floor) {
+      const w = floor >= 1 ? base : 100 + ((ratio - floor) / (1 - floor)) * (base - 100);
+      return { weight: Math.round(w / 10) * 10, fill: 1, outline: 0, alpha: 1 };
+    }
+    const alpha = clamp(ratio / floor, 0, 1);
+    // Small lettering that is just coming in is already hairline-thin, and
+    // there is a lot of it: a plain fade is enough there, and much cheaper.
+    if (u < 0) return { weight: 100, fill: alpha, outline: 0, alpha };
+    const m = clamp((floor - ratio) / (floor * 0.4), 0, 1); // 0 = filled … 1 = outline only
+    return { weight: 100, fill: 1 - m, outline: (m * sBase * thick) / (2 * f), alpha };
+  }
+
   // Pages drawn small (zoomed out) are kept as bitmaps: there can be dozens
   // on screen and each is some eighty stretched letters.
   const rasterCache = new Map();
@@ -856,17 +927,25 @@
       x0 = Math.min(x0, wx); x1 = Math.max(x1, wx);
       y0 = Math.min(y0, wy); y1 = Math.max(y1, wy);
     }
+    // Each entry: [page scale L, how to draw it (null = normally)].
     let scales;
-    if (weave.fixed) scales = [[0, 1]];
+    if (weave.fixed) scales = [[0, null]];
     else {
+      // Two scales of lettering are always there, one twice the size of the
+      // other. Zooming in, the larger one's threads spread apart and thin
+      // away to nothing, while the smaller one's start as hairlines between
+      // them and thicken: each thread lives through two octaves of zoom, and
+      // there is never a moment where one picture is swapped for another.
+      // Thinning halves the ink exactly as fast as the finer threads double
+      // it, so the loom stays as dense as the message throughout.
       const lz = Math.log2(V.zoom);
-      const L0 = Math.round(lz), d = lz - L0;        // d in [-0.5, 0.5]
-      const near = 0.5 - Math.abs(d);                // 0 right at the hand-over
-      scales = [[L0, 1]];
-      if (near < 0.08) {
-        const t = 0.5 + (0.5 * near) / 0.08;
-        scales[0][1] = t;
-        scales.push([L0 + (d > 0 ? 1 : -1), 1 - t]);
+      const Lf = Math.floor(lz);
+      scales = [];
+      for (const L of [Lf, Lf + 1]) {
+        const u = lz - L;                            // size on screen, in octaves, −1…1
+        const thick = 1 - Math.abs(u);               // thread thickness on screen, 0…1
+        if (thick < 0.02) continue;
+        scales.push([L, threadStyle(thick, u)]);
       }
     }
     const W = view.visW, H = view.visH;
@@ -874,13 +953,13 @@
     let pending = false;
     c.save();
     c.fillStyle = theme.ink;
-    for (const [L, a] of scales) {
+    for (const [L, style] of scales) {
       const sc = Math.pow(2, -L);
       const cw = W * sc, ch = H * sc;
       const res = k * sc;                          // device px per layout unit of this page
-      const small = res < 0.5;                     // small enough to draw from a bitmap
+      const small = !style && res < 0.5;           // small enough to draw from a bitmap
       const pad = small ? 0 : 0.6;                 // (lowercase lettering runs on past its page)
-      c.globalAlpha = alpha * a;
+      c.globalAlpha = alpha;
       for (const layer of [0, 1]) {
         const down = Math.abs(EDGES[layer ? S.edgeB : S.edgeA].U[1]) > 0.5;
         // m runs over the unshifted direction (columns for lettering that
@@ -911,7 +990,7 @@
             const ax = (x0 - px) / sc, bx = (x1 - px) / sc, ay = (y0 - py) / sc, by = (y1 - py) / sc;
             const p = ax * g.R[0] + ay * g.R[1], q = bx * g.R[0] + by * g.R[1];
             const up = ax * g.U[0] + ay * g.U[1], uq = bx * g.U[0] + by * g.U[1];
-            drawGlyphs(c, g, [Math.min(p, q), Math.max(p, q), Math.min(up, uq), Math.max(up, uq)]);
+            drawGlyphs(c, g, [Math.min(p, q), Math.max(p, q), Math.min(up, uq), Math.max(up, uq)], style);
           }
         }
       }
@@ -1560,6 +1639,6 @@
       .catch(() => {})
       .then(init);
     // If the font arrives late (slow connection), reweave the words with it.
-    document.fonts.ready.then(() => { stemCache.clear(); if (scene) rebuild({ newWeave: false }); });
+    document.fonts.ready.then(() => { stemCache.clear(); stemWidths.clear(); if (scene) rebuild({ newWeave: false }); });
   } else init();
 })();
