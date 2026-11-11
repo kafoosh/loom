@@ -1,19 +1,20 @@
 /*
  * loom — a tilt-to-read card revelation.
  *
- * The picture is two phrases drawn on a 1000 × 1000 unit canvas, built the
- * way classic tilt-to-read images are:
- *   – Each phrase is small, light, mostly lowercase type, stretched ~24× along
- *     one axis only (phrase 1 vertically, phrase 2 horizontally) and laid over
- *     the other. Viewed at a grazing angle along that axis, foreshortening
- *     squashes it back into letters.
- *   – There are no separate decoy lines. The loose threads are letter stems
- *     (ascenders and descenders) that run on past the block.
+ * The page opens as a sheet of loom threads, far bigger than the screen,
+ * that can be dragged, zoomed, turned and re-rolled. Nothing is hidden in it.
  *
  * Secret input:
  *   – Pinch: each `pinchStep` change of finger distance steps the value.
  *   – Rotate: every quarter turn steps the suit (the image snaps to 90°).
- * When the fingers lift, the message is rewoven for the new card.
+ * When the fingers lift after the first input, two phrases fade in mid-screen,
+ * built the way classic tilt-to-read images are:
+ *   – Each is small, light, lowercase type, stretched ~24× along one axis only
+ *     (phrase 1 vertically, phrase 2 horizontally), and both fill the same
+ *     rectangle. Viewed at a grazing angle along that axis, foreshortening
+ *     squashes a phrase back into letters.
+ *   – Loom threads are cleared only where they would read as letter stems, so
+ *     the block sits inside the sheet rather than on top of it.
  */
 (() => {
   'use strict';
@@ -72,6 +73,8 @@
     startCard: 'random',
     stretch: 24,
     density: 1,
+    loom: 1,
+    hideUntilInput: true,
     layout: 'overlap',
     weight: 300,
     theme: 'linen',
@@ -129,6 +132,7 @@
     s: 1,              // zoom
     pan: { x: 0, y: 0 },
     seed: newSeed(),
+    revealed: false,   // has the hidden message been woven in yet?
   };
 
   const canvas = document.getElementById('stage');
@@ -137,7 +141,7 @@
   const hap = document.getElementById('hap');
   let view = { w: 0, h: 0, dpr: 1, cx: 0, cy: 0, fit: 1 };
 
-  let scene = null;    // { weave, msg }
+  let scene = null;    // { weave, msg } — msg is null until a card is input
   let fade = null;     // { prev, start, dur }
   let anim = null;     // settle animation
   let raf = 0;
@@ -167,13 +171,107 @@
 
   // ---------------------------------------------------------------- weave
   /**
-   * There are no separate decoy lines. A "weave" is only the random numbers
-   * that place the two phrases and decide which letter stems run on as loose
-   * threads, so Reweave changes all of those at once.
+   * A weave is the random part of the picture: the sheet of loom threads that
+   * covers the whole page, plus the numbers that place the two phrases and
+   * decide which letter stems run on as loose threads.
    */
   function buildWeave(seed) {
     const r = mulberry32(seed);
-    return { seed, jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() } };
+    const jitter = { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() };
+    return { seed, jitter, sheet: buildSheet(mulberry32((seed ^ 0x5bd1e995) >>> 0), S.loom) };
+  }
+
+  /**
+   * The loom: long warp and weft threads across a sheet far bigger than the
+   * screen, drawn with the same vocabulary a stretched letter has — stems,
+   * pairs of stems joined by a fat tapered arch (a stretched n), long closed
+   * loops (a stretched o), short thick bars (a stretched crossbar) and
+   * lozenges (a stretched dot). None of it spells anything.
+   */
+  function buildSheet(r, amount) {
+    const layers = [new Path2D(), new Path2D()];   // [warp (vertical), weft (horizontal)]
+    if (!(amount > 0)) return layers;
+    const st = measureStem('l', 'top');
+    const w = (st ? st.x1 - st.x0 : 0.07) * 52;   // as thick as the letters' stems
+    const EXT = 4200;                              // half-size of the sheet
+    const pitch = 104 / Math.pow(amount, 0.9);
+
+    // u runs across a thread, v along it; dir 0 = warp (vertical), 1 = weft.
+    const poly = (dir, pts, hole = false) => {
+      const m = pts.map(([u, v]) => (dir ? [MID + v, MID + u] : [MID + u, MID + v]));
+      let area = 0;
+      for (let k = 0; k < m.length; k++) {
+        const a = m[k], b = m[(k + 1) % m.length];
+        area += a[0] * b[1] - b[0] * a[1];
+      }
+      if ((area < 0) !== hole) m.reverse();   // solids one way round, holes the other
+      const path = layers[dir];
+      path.moveTo(m[0][0], m[0][1]);
+      for (let k = 1; k < m.length; k++) path.lineTo(m[k][0], m[k][1]);
+      path.closePath();
+    };
+    const rect = (dir, u0, v0, u1, v1) => poly(dir, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
+    const ellipse = (cu, cv, ru, rv, n = 40) => {
+      const pts = [];
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2;
+        pts.push([cu + ru * Math.cos(a), cv + rv * Math.sin(a)]);
+      }
+      return pts;
+    };
+    // two stems joined at one end by a tapered arch, like the top of an n
+    const arch = (dir, uL, uR, vEnd, sgn) => {
+      const cu = (uL + uR) / 2, half = (uR - uL) / 2;
+      const A = 200 + r() * 260, t = 50 + r() * 50, N = 22;
+      const pts = [];
+      for (let k = 0; k <= N; k++) {
+        const a = (Math.PI * k) / N;
+        pts.push([cu - (half + w / 2) * Math.cos(a), vEnd + sgn * A * Math.sin(a)]);
+      }
+      for (let k = 0; k <= N; k++) {
+        const a = (Math.PI * k) / N;
+        pts.push([cu + (half - w / 2) * Math.cos(a), vEnd + sgn * (A - t) * Math.sin(a)]);
+      }
+      poly(dir, pts);
+    };
+
+    for (const dir of [0, 1]) {
+      for (let p = -EXT; p <= EXT; p += pitch) {
+        const u = p + (r() - 0.5) * pitch * 0.8;
+        const len = 1500 + r() * r() * 6500;
+        const c = (r() - 0.5) * 2 * (EXT - 600);
+        const a = c - len / 2, b = c + len / 2;
+        const kind = r();
+        if (kind < 0.09) {
+          // a long closed loop
+          const ru = 9 + r() * 8, rv = 350 + r() * 900, t = 45 + r() * 45;
+          poly(dir, ellipse(u, c, ru + w / 2, rv));
+          poly(dir, ellipse(u, c, ru - w / 2, rv - t), true);
+          continue;
+        }
+        rect(dir, u - w / 2, a, u + w / 2, b);
+        if (kind > 0.7) {
+          // a second thread close by, sometimes joined to the first at one end
+          const d = 20 + r() * 16;
+          const end = r();
+          let a2 = a, b2 = b;
+          if (end < 0.4) arch(dir, u, u + d, a, -1);
+          else if (end < 0.65) arch(dir, u, u + d, b, 1);
+          else { a2 = a + r() * 500; b2 = b - r() * 500; }
+          rect(dir, u + d - w / 2, a2, u + d + w / 2, b2);
+        }
+        // thick portions: a short bar now and then
+        const bits = Math.floor((len / 1900) * (0.5 + r()));
+        for (let k = 0; k < bits; k++) {
+          const pos = a + r() * len;
+          const across = 12 + r() * 10, along = 45 + r() * 50, off = (r() - 0.5) * 8;
+          rect(dir, u + off - across / 2, pos - along / 2, u + off + across / 2, pos + along / 2);
+        }
+        // a lozenge floating off one end
+        if (r() < 0.1) poly(dir, ellipse(u, a - 70 - r() * 50, w * 0.85, 26 + r() * 22, 20));
+      }
+    }
+    return layers;
   }
 
   // ---------------------------------------------------------------- messages
@@ -239,7 +337,7 @@
    * `extras`, a Path2D (in the phrase's own unstretched coordinates) holding
    * those run-on stems and the redrawn k's.
    */
-  function layoutSolid(text, budgetW, maxBand, rnd, sizeJitter) {
+  function layoutSolid(text, budgetW, maxBand, rnd, sizeJitter, maxTrack = 0.05) {
     const t = text.replace(/[ \t]+/g, ' ').trim();
     if (!t) return null;
     const lines = t.split(/\s*[|\n]\s*/).filter(Boolean);
@@ -293,9 +391,9 @@
     const out = lines.map((ln, i) => {
       const chars = [...ln];
       const w = adv[i].reduce((x, v) => x + v, 0) * em;
-      // only a touch of extra letter-spacing: tight letters hide the words better
+      // spread the letters to fill the width, up to maxTrack ems between them
       const track = chars.length > 1
-        ? clamp((budgetW * 0.97 - w) / (chars.length - 1), 0, 0.05 * em) : 0;
+        ? clamp((budgetW - w) / (chars.length - 1), 0, maxTrack * em) : 0;
       const full = w + track * (chars.length - 1);
       textW = Math.max(textW, full);
       const base = -total / 2 + i * pitch + xhU;   // baseline (y grows downwards)
@@ -349,10 +447,33 @@
       });
       return { chars: placed, y: base };
     });
-    return { lines: out, extras, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
+    // the area the phrase needs clear of loom threads (unstretched, y down)
+    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + (0.86 - xh) * em, down: total / 2 + 0.34 * em };
+    return { lines: out, extras, box, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
 
-  function buildMessage(card, weave, q) {
+  /** Width of a phrase in ems (its longest line), and the font's x-height. */
+  function measurePhrase(text) {
+    mctx.font = `${S.weight} 100px ${FONT}`;
+    const lines = text.replace(/[ \t]+/g, ' ').trim().split(/\s*[|\n]\s*/).filter(Boolean);
+    const nat = Math.max(0.01, ...lines.map((ln) => mctx.measureText(ln).width / 100));
+    return { nat, xh: (mctx.measureText('x').actualBoundingBoxAscent || 52) / 100 };
+  }
+
+  /**
+   * Where a newly woven message goes: centred on whatever is in the middle
+   * of the screen right now, and scaled so it fits the screen at the current
+   * zoom. (Image coordinates; k is the scale applied to the layout.)
+   */
+  function currentFrame() {
+    const kv = view.fit * state.s;
+    const a = state.theta - (screenAngle() * Math.PI) / 180;
+    const dx = -state.pan.x / kv, dy = -state.pan.y / kv;
+    const cos = Math.cos(-a), sin = Math.sin(-a);
+    return { x: MID + dx * cos - dy * sin, y: MID + dx * sin + dy * cos, k: 1 / state.s };
+  }
+
+  function buildMessage(card, weave, q, frame) {
     const msgs = [
       { text: applyCase(S.phraseA, true), edge: S.edgeA },
       { text: applyCase(cardPhrase(card), false), edge: S.edgeB },
@@ -381,17 +502,28 @@
         return { c: at([s * A.U[0], s * A.U[1]], j.u * 10, j.r * 8, e), bw: ext(e.R) * 0.9, mb: bl * 0.8 };
       });
     } else if (S.layout === 'overlap') {
-      // Classic look: the two phrases cross in the centre. Each is set to the
-      // same width and then stretched along its own axis as far as the
-      // stretch setting says, up to what the screen can show.
-      const side = Math.min(ext(A.U), ext(A.R)) * 0.72;
+      // Classic look: one rectangle that both phrases fill completely.
+      // Phrase 1 runs across it and is stretched down it; phrase 2 the other
+      // way round. Each is letter-spaced to reach the far side, so there is
+      // no dead area where only one phrase shows.
+      // Across the screen there is less room than down it: the ascenders
+      // and descenders must mostly stay on screen, or an h reads as an n.
+      const St = Math.min(MAX_STRETCH, S.stretch);
+      const m0 = measurePhrase(msgs[0].text);
+      const acrossScreen = view.visW * 0.62, downScreen = view.visH * 0.52;
+      const sideways = Math.abs(A.U[0]) > 0.5;       // is phrase 1 stretched across the screen?
+      const X = sideways ? downScreen : acrossScreen; // extent along phrase 1's reading direction
+      const m1 = measurePhrase(msgs[1].text);
+      // Tall enough that phrase 1 is not squeezed, but not so tall that a
+      // short card name has to be spaced out to more than ~1.7× its width.
+      const Y = Math.min(sideways ? acrossScreen : downScreen,
+        (X * St * m0.xh) / m0.nat, (1.7 * m1.nat * X) / (St * m0.xh));
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
-        // Across the screen there is less room: the ascenders and descenders
-        // (about 0.4 of the block each side) must mostly stay on screen, or an
-        // h reads as an n. Down the screen there is plenty.
-        const room = Math.abs(e.U[0]) > 0.5 ? view.visW * 0.676 : view.visH * 0.56;
-        return { c: at([0, 0], j.u * 22 * (i ? -1 : 1), j.r * 16, e), bw: side, mb: room };
+        return {
+          c: at([0, 0], j.u * 8 * (i ? -1 : 1), j.r * 8, e),
+          bw: i ? Y : X, mb: i ? X : Y, track: 0.7, exact: true,
+        };
       });
     } else {
       // Split: each message gets its own half of the cloth, so the two
@@ -410,19 +542,21 @@
     const info = msgs.map((m, i) => {
       const e = EDGES[m.edge];
       const rnd = mulberry32((weave.seed + 0x9e3779b9 * (i + 1)) >>> 0);
-      const sizeJitter = 0.94 + 0.06 * (i ? 1 - j.band : j.band);
-      const g = layoutSolid(m.text, regions[i].bw, regions[i].mb, rnd, sizeJitter);
+      const sizeJitter = regions[i].exact ? 1 : 0.94 + 0.06 * (i ? 1 - j.band : j.band);
+      const g = layoutSolid(m.text, regions[i].bw, regions[i].mb, rnd, sizeJitter, regions[i].track);
       if (!g) return null;
-      glyphs.push({ lines: g.lines, extras: g.extras, font: g.font, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
+      glyphs.push({ lines: g.lines, extras: g.extras, box: g.box, font: g.font, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
       return { textW: g.textW, bandLen: g.bandLen, lines: g.text, St: g.St, edge: m.edge };
     });
-    return { glyphs, q, key: cardKey(card), info, card };
+    return { glyphs, q, frame: frame || { x: MID, y: MID, k: 1 }, key: cardKey(card), info, card };
   }
 
   // ---------------------------------------------------------------- scene
   function rebuild({ fadeMs = 0, newWeave = true } = {}) {
     const weave = newWeave || !scene ? buildWeave(state.seed) : scene.weave;
-    const msg = buildMessage(currentCard(), weave, quadrant());
+    // an existing message stays where it was woven; a new one goes mid-screen
+    const frame = scene && scene.msg ? scene.msg.frame : currentFrame();
+    const msg = state.revealed ? buildMessage(currentCard(), weave, quadrant(), frame) : null;
     setScene({ weave, msg }, fadeMs);
   }
   function setScene(next, fadeMs) {
@@ -432,18 +566,24 @@
     requestDraw();
   }
 
-  /** After a gesture settles: reweave the message if the card changed. */
-  function commit(fadeMs = 380) {
+  /**
+   * After a gesture settles: weave the message in (the first time a card is
+   * input) or reweave it if the card changed. It is always laid out for the
+   * view as it is now: mid-screen, upright, sized to fit.
+   */
+  function commit(fadeMs) {
     if (!scene) return;
+    updateIndicator();
+    if (!state.revealed) return;
     const card = currentCard();
     const q = quadrant();
-    if (cardKey(card) !== scene.msg.key) {
-      setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, q) }, fadeMs);
+    if (!scene.msg || cardKey(card) !== scene.msg.key) {
+      const dur = fadeMs !== undefined ? fadeMs : (scene.msg ? 380 : 900);
+      setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, q, currentFrame()) }, dur);
     } else if (scene.msg.q !== q) {
       // Same card ⇒ same suit ⇒ q differs by whole turns: visually identical.
       scene.msg.q = q;
     }
-    updateIndicator();
   }
 
   // ---------------------------------------------------------------- rendering
@@ -478,25 +618,100 @@
       visH: physH / fit,
     };
     if (scene && (Math.abs((prevVis || 0) - view.visW) > 1 || Math.abs((prevVisH || 0) - view.visH) > 1)) {
-      scene = { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, scene.msg.q) };
+      const old = scene.msg;
+      scene = { weave: scene.weave, msg: old ? buildMessage(currentCard(), scene.weave, old.q, old.frame) : null };
       fade = null;
     }
     requestDraw();
   }
 
-  function drawScene(c, sc, alpha, xf) {
+  const msgTransform = (c, m) => {
+    c.translate(m.frame.x, m.frame.y);
+    c.rotate(-m.q * Q);
+    c.scale(m.frame.k, m.frame.k);
+    c.translate(-MID, -MID);
+  };
+  // local x → reading direction R; local y (down the glyph) → −U, ×St
+  const glyphTransform = (c, g) => c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
+
+  /**
+   * Where the loom must keep clear of the message. A thread only gets in the
+   * way of the phrase that is stretched along it (tilted, it would look like
+   * a letter stem), so each layer is cleared from that phrase's box only and
+   * runs right up to the block everywhere else.
+   */
+  function clearZones(sc, dir) {
+    const m = sc && sc.msg;
+    if (!m) return [];
+    const turned = mod(m.q, 2) === 1;
+    return m.glyphs
+      .filter((g) => ((Math.abs(g.U[1]) > 0.5) !== turned) === (dir === 0))
+      .map((g) => ({ m, g }));
+  }
+  function addZone(c, xf, z) {
+    const b = z.g.box;
+    c.save();
+    xf(c);
+    msgTransform(c, z.m);
+    glyphTransform(c, z.g);
+    c.rect(-b.hw, -b.up, b.hw * 2, b.up + b.down);
+    c.restore();
+  }
+  /** Fill one layer of the sheet, optionally only inside one zone, and outside others. */
+  function fillLayer(c, xf, path, alpha, inside, outside) {
+    if (alpha <= 0) return;
+    const theme = THEMES[S.theme] || THEMES.linen;
+    c.save();
+    if (inside) {
+      c.beginPath();
+      addZone(c, xf, inside);
+      c.clip();
+    }
+    for (const z of outside) {
+      c.beginPath();
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.rect(0, 0, c.canvas.width, c.canvas.height);
+      c.restore();
+      addZone(c, xf, z);
+      c.clip('evenodd');
+    }
+    xf(c);
+    c.globalAlpha = alpha;
+    c.fillStyle = theme.ink;
+    c.fill(path);
+    c.restore();
+  }
+
+  /**
+   * The sheet of loom threads. With `prev` (a scene on the same weave) and
+   * 0 ≤ e ≤ 1 it draws a crossfade: threads outside every clear zone stay
+   * steady, and only those entering or leaving a zone fade.
+   */
+  function drawSheet(c, sc, alpha, xf, prev = null, e = 1) {
+    for (const dir of [0, 1]) {
+      const path = sc.weave.sheet[dir];
+      const now = clearZones(sc, dir), was = clearZones(prev, dir);
+      fillLayer(c, xf, path, alpha, null, [...now, ...was]);
+      if (!prev) continue;
+      for (const z of now) fillLayer(c, xf, path, alpha * (1 - e), z, was); // being cleared
+      for (const z of was) fillLayer(c, xf, path, alpha * e, z, now);       // growing back
+    }
+  }
+
+  /** The hidden message, if it has been woven in. */
+  function drawMsg(c, sc, alpha, xf) {
+    const m = sc.msg;
+    if (!m || alpha <= 0) return;
     const theme = THEMES[S.theme] || THEMES.linen;
     c.save();
     xf(c);
     c.globalAlpha = alpha;
-    c.translate(MID, MID);
-    c.rotate(-sc.msg.q * Q);
-    c.translate(-MID, -MID);
+    msgTransform(c, m);
     c.fillStyle = theme.ink;
-    for (const g of sc.msg.glyphs) {
+    for (const g of m.glyphs) {
       c.save();
-      // local x → reading direction R; local y (down the glyph) → −U, ×St
-      c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
+      glyphTransform(c, g);
       c.font = g.font;
       c.textAlign = 'left';
       c.textBaseline = 'alphabetic';
@@ -507,6 +722,11 @@
       c.restore();
     }
     c.restore();
+  }
+
+  function drawScene(c, sc, alpha, xf) {
+    drawSheet(c, sc, alpha, xf);
+    drawMsg(c, sc, alpha, xf);
   }
 
   function viewTransform(c) {
@@ -528,10 +748,19 @@
     let t = 1;
     if (fade) {
       t = clamp((now - fade.start) / fade.dur, 0, 1);
-      if (t < 1) drawScene(ctx, fade.prev, 1 - easeOut(t), viewTransform);
-      else fade = null;
+      if (t >= 1) fade = null;
     }
-    drawScene(ctx, scene, t < 1 ? easeOut(t) : 1, viewTransform);
+    if (!fade) { drawScene(ctx, scene, 1, viewTransform); return; }
+    const e = easeOut(t);
+    if (fade.prev.weave === scene.weave) {
+      // same loom, only the message changes: keep the threads steady
+      drawSheet(ctx, scene, 1, viewTransform, fade.prev, e);
+      drawMsg(ctx, fade.prev, 1 - e, viewTransform);
+      drawMsg(ctx, scene, e, viewTransform);
+    } else {
+      drawScene(ctx, fade.prev, 1 - e, viewTransform);
+      drawScene(ctx, scene, e, viewTransform);
+    }
   }
 
   function requestDraw() {
@@ -574,8 +803,11 @@
 
   function settle() {
     const theta = quadrant() * Q;
-    const s = clamp(state.s, 0.6, 3.2);
-    const limX = view.w * 0.45, limY = view.h * 0.4;
+    // Free zoom while it is only a loom. Once a card has been input the sheet
+    // relaxes back to natural size on release, so the message (laid out to
+    // fit the screen) and the loom threads around it are at the same scale.
+    const s = state.revealed ? 1 : clamp(state.s, 0.6, 2.2);
+    const limX = view.w * 1.3, limY = view.h * 1.1;
     const px = clamp(state.pan.x, -limX, limX), py = clamp(state.pan.y, -limY, limY);
     const moved = Math.abs(theta - state.theta) > 1e-4 || Math.abs(s - state.s) > 1e-4 ||
       px !== state.pan.x || py !== state.pan.y;
@@ -598,6 +830,7 @@
 
   function stepValue(d) {
     state.value = mod(state.value + d, 13);
+    state.revealed = true;
     haptic();
     updateIndicator();
     if (S.liveUpdate) liveRebuild();
@@ -608,6 +841,7 @@
     const q = quadrant();
     if (q !== lastQuadrant) {
       lastQuadrant = q;
+      state.revealed = true;
       haptic();
       updateIndicator();
       if (S.liveUpdate) liveRebuild();
@@ -616,10 +850,10 @@
 
   function liveRebuild() {
     // keep the message in its current frame while the fingers are down
-    if (!scene) return;
+    if (!scene || !scene.msg) return; // nothing woven yet: it appears on release
     const card = currentCard();
     if (cardKey(card) === scene.msg.key) return;
-    setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, scene.msg.q) }, 140);
+    setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, scene.msg.q, scene.msg.frame) }, 140);
   }
 
   function updateIndicator() {
@@ -748,7 +982,18 @@
       const now = performance.now();
       if (now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
         lastTap.t = 0;
-        animateTo({ s: 1, px: 0, py: 0, theta: quadrant() * Q }, 300, () => commit());
+        const theta = quadrant() * Q;
+        const to = { s: 1, px: 0, py: 0, theta };
+        if (scene && scene.msg) {
+          const f = scene.msg.frame;
+          const a = theta - (screenAngle() * Math.PI) / 180;
+          to.s = 1 / f.k;
+          const kv = view.fit * to.s;
+          const ux = (f.x - MID) * kv, uy = (f.y - MID) * kv;
+          to.px = -(ux * Math.cos(a) - uy * Math.sin(a));
+          to.py = -(ux * Math.sin(a) + uy * Math.cos(a));
+        }
+        animateTo(to, 300, () => commit());
         return;
       }
       lastTap = { t: now, x: e.clientX, y: e.clientY };
@@ -819,6 +1064,7 @@
   // ---------------------------------------------------------------- reweave
   function reweave() {
     state.seed = newSeed();
+    state.revealed = !S.hideUntilInput; // back to a bare loom until the next input
     rebuild({ fadeMs: 650 });
     updateIndicator();
   }
@@ -853,6 +1099,7 @@
   function updateOutputs() {
     form.elements.stretchOut.value = `${(+S.stretch).toFixed(0)}× · view at ~${(Math.asin(1 / S.stretch) * 180 / Math.PI).toFixed(1)}°`;
     form.elements.densityOut.value = `${Math.round(S.density * 100)}%`;
+    form.elements.loomOut.value = `${Math.round(S.loom * 100)}%`;
     form.elements.weightOut.value = `${Math.round(S.weight)}`;
     form.elements.pinchStepOut.value = `${Math.round((S.pinchStep - 1) * 100)}%`;
   }
@@ -880,6 +1127,7 @@
       const c = cardWith(before.suitOrder);
       state.suitOffset = mod(S.suitOrder.indexOf(c) - quadrant(), 4);
     }
+    if (!S.hideUntilInput) state.revealed = true;
     clearTimeout(formTimer);
     formTimer = setTimeout(() => { rebuild({ newWeave: true }); updateIndicator(); drawPreviews(); }, 60);
   });
@@ -918,9 +1166,13 @@
   /** Simulated foreshortening: what the eye sees from `edge` at a grazing angle. */
   function drawPreview(cv, edge, fitHeight = false) {
     if (!scene) return;
-    const info = (scene.msg.info || []).find((i) => i && i.edge === edge);
+    // Before a card is input nothing is woven in; preview what would be.
+    const sc = scene.msg ? scene
+      : { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, quadrant(), currentFrame()) };
+    const m = sc.msg;
+    const info = (m.info || []).find((i) => i && i.edge === edge);
     const St = info ? info.St : S.stretch;
-    const span = 2000;                       // image units rendered, square
+    const span = 2000;                       // layout units rendered, square
     const cropW = CLOTH + 80;                // units shown across the preview
     const scale = cv.width / cropW;          // preview px per unit, across
     // enough of the stretched axis for the block plus its ascenders/descenders
@@ -934,12 +1186,12 @@
     c.fillStyle = theme.bg;
     c.fillRect(0, 0, size, size);
     const k = size / span;
-    drawScene(c, scene, 1, (cc) => {
+    drawScene(c, sc, 1, (cc) => {
       cc.setTransform(1, 0, 0, 1, 0, 0);
       cc.translate(size / 2, size / 2);
-      cc.rotate(EDGES[edge].toBottom + scene.msg.q * Q);
-      cc.scale(k, k);
-      cc.translate(-MID, -MID);
+      cc.rotate(EDGES[edge].toBottom + m.q * Q);
+      cc.scale(k / m.frame.k, k / m.frame.k);
+      cc.translate(-m.frame.x, -m.frame.y);
     });
     const out = cv.getContext('2d');
     out.fillStyle = theme.bg;
@@ -972,6 +1224,7 @@
       state.value = Math.floor(Math.random() * 13);
       state.suitOffset = Math.floor(Math.random() * 4);
     }
+    state.revealed = !S.hideUntilInput;
     applyTheme();
     resize();
     rebuild();
@@ -993,6 +1246,7 @@
     setCard(value, suitKey) {
       state.value = mod(value, 13);
       state.suitOffset = mod(S.suitOrder.indexOf(suitKey) - quadrant(), 4);
+      state.revealed = true;
       commit(0);
     },
     preview(edge, w = 640, h = 260) {
