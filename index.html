@@ -76,9 +76,9 @@
         </label>
         <label>Letter case
           <select name="letterCase">
-            <option value="lower">all lowercase (best hidden)</option>
+            <option value="upper">ALL CAPITALS (every letter the same height)</option>
+            <option value="lower">all lowercase (tall letters stick out)</option>
             <option value="sentence">Sentence case</option>
-            <option value="upper">ALL CAPITALS (more obvious)</option>
           </select>
         </label>
       </fieldset>
@@ -93,6 +93,9 @@
         </label>
         <label>Pinch per value <output name="pinchStepOut"></output>
           <input type="range" name="pinchStep" min="1.1" max="1.6" step="0.02">
+        </label>
+        <label>Twist per suit (22.5° = all four suits in a quarter turn) <output name="suitStepDegOut"></output>
+          <input type="range" name="suitStepDeg" min="10" max="90" step="2.5">
         </label>
         <label class="check"><input type="checkbox" name="gestureLock"> Lock each gesture to pinch <em>or</em> rotate</label>
         <label class="check"><input type="checkbox" name="liveUpdate"> Change threads while fingers are down</label>
@@ -121,12 +124,13 @@
         <label>Letter thickness <output name="weightOut"></output>
           <input type="range" name="weight" min="100" max="700" step="10">
         </label>
-        <label>Loose threads (letter stems that run on past the block) <output name="densityOut"></output>
+        <label>Lowercase only: tall parts of letters (lower = the words reach closer to the edges, but h/n and d/a are harder to tell apart) <output name="ascenderOut"></output>
+          <input type="range" name="ascender" min="0.15" max="1" step="0.05">
+        </label>
+        <label>Lowercase only: loose threads (letter stems that run on past the block) <output name="densityOut"></output>
           <input type="range" name="density" min="0" max="2" step="0.1">
         </label>
-        <label>Loom threads (the sheet around the words) <output name="loomOut"></output>
-          <input type="range" name="loom" min="0" max="2" step="0.1">
-        </label>
+        <label class="check"><input type="checkbox" name="loomOn"> Fill the rest of the loom with nonsense lettering</label>
         <label>Weave the message in
           <select name="revealOn">
             <option value="lock">when locked in (double-tap)</option>
@@ -153,11 +157,11 @@
       <details>
         <summary>How to perform</summary>
         <ol>
-          <li>Open the page. Let the spectator drag, zoom, spin and <b>Reweave</b> the threads; it's just an endless random loom, with nothing hidden in it.</li>
+          <li>Open the page. Let the spectator drag, zoom, spin and <b>Reweave</b> the threads; it's just an endless loom of nonsense lettering, with nothing hidden in it.</li>
           <li>Have a card chosen and shown to you.</li>
-          <li>Pick the phone back up and "adjust the weave": <b>spread/pinch</b> steps the value (A → 2 → … → K → A), <b>twist a quarter turn</b> steps the suit. Each step gives a tick and updates the indicator in the bottom‑right corner.</li>
-          <li><b>Double‑tap</b> to lock the card in. The message quietly weaves itself into the middle of the screen, the indicator gets a thin underline, and from now on pinching and twisting only move the picture.</li>
-          <li>Tilt the phone and look along it from the charger end: <b>the card you chose was</b>. Turn the phone a quarter turn and look from the left edge: <b>the seven of hearts</b>.</li>
+          <li>Pick the phone back up and "adjust the weave": <b>spread/pinch</b> steps the value (A → 2 → … → K → A), <b>twisting</b> steps the suit every 22.5°, so all four go by in a quarter turn. Each step gives a tick and updates the indicator in the bottom‑right corner.</li>
+          <li><b>Double‑tap</b> to lock the card in. The lettering on screen quietly reweaves itself into the message, filling the screen, the indicator gets a thin underline, and from now on pinching and twisting only move the picture.</li>
+          <li>Tilt the phone and look along it from the charger end: <b>THE CARD YOU CHOSE WAS</b>. Turn the phone a quarter turn and look from the left edge: <b>THE SEVEN OF HEARTS</b>.</li>
         </ol>
         <p class="note">Other controls: one finger pans. Once locked, double‑tap brings the message back to the centre, and <b>Reweave</b> clears it for the next performance. Long‑press the <b>loom</b> wordmark to open this panel. On a computer: scroll = value, shift+scroll = suit, arrow keys step value/suit, <kbd>S</kbd> opens setup.</p>
         <p class="note">Tip: add the page to your home screen so it opens full screen without browser bars.</p>

@@ -1,23 +1,23 @@
 /*
  * loom — a tilt-to-read card revelation.
  *
- * The page opens as an endless loom of threads that can be dragged, zoomed,
- * turned and re-rolled. It is self-similar: zooming in keeps revealing new
- * threads of the same size. Nothing is hidden in it.
+ * The page is an endless loom made of stretched lettering: page after page
+ * of it, one phrase across each page and one down, all nonsense. It can be
+ * dragged, zoomed, turned and re-rolled, and zooming in keeps finding new
+ * pages the same size on screen. Nothing is hidden in it.
  *
  * Secret input (shown only in the faint corner indicator):
  *   – Pinch: each `pinchStep` change of finger distance steps the value.
- *   – Rotate: every quarter turn steps the suit (the image snaps to 90°).
- *   – Double-tap: lock the card in. Two phrases fade in mid-screen and stay
- *     woven into the loom; pinching and turning now only move the picture.
+ *   – Rotate: every 22.5° of twist steps the suit, so all four go by in a
+ *     quarter turn. The picture can be left at any angle.
+ *   – Double-tap: lock the card in. The lettering on screen is rewoven into
+ *     two real phrases that fill the screen and stay part of the loom;
+ *     pinching and turning now only move the picture.
  *
- * The phrases are built the way classic tilt-to-read images are:
- *   – Each is small, light, lowercase type, stretched ~24× along one axis only
- *     (phrase 1 vertically, phrase 2 horizontally), and both fill the same
- *     rectangle. Viewed at a grazing angle along that axis, foreshortening
- *     squashes a phrase back into letters.
- *   – Loom threads are cleared only where they would read as letter stems, so
- *     the block sits inside the loom rather than on top of it.
+ * All the lettering is built the way classic tilt-to-read images are: small,
+ * light, lowercase type, stretched ~24× along one axis only (one phrase down
+ * the screen, the other across). Viewed at a grazing angle along that axis,
+ * foreshortening squashes a phrase back into letters.
  */
 (() => {
   'use strict';
@@ -32,7 +32,6 @@
   const MAX_STRETCH = 40;
   const ZOOM_MIN = 1 / 8, ZOOM_MAX = 64;   // the loom is endless; this is just a sane range
   const ROAM = 40000;                      // how far (image units) the view may wander
-  const LOOM_PITCH = 27;                   // thread spacing of one loom octave at zoom 1
 
   const SUITS = {
     S: { name: 'SPADES', sym: '♠' },
@@ -69,9 +68,10 @@
     edgeA: 'bottom',
     edgeB: 'left',
     valueStyle: 'words',
-    letterCase: 'lower',
+    letterCase: 'upper',
     suitOrder: 'CHSD',
     pinchStep: 1.22,
+    suitStepDeg: 22.5,  // twist per suit: all four suits in a quarter turn
     gestureLock: true,
     liveUpdate: false,
     haptics: true,
@@ -79,7 +79,8 @@
     startCard: 'random',
     stretch: 24,
     density: 1,
-    loom: 1,
+    loomOn: true,
+    ascender: 0.35,     // how much of their stretch the ascenders/descenders keep
     revealOn: 'lock',   // 'lock' (double-tap), 'input' (first pinch/twist) or 'start'
     layout: 'overlap',
     weight: 300,
@@ -112,6 +113,8 @@
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) {
         const saved = JSON.parse(raw);
+        if (saved.loom === 0) saved.loomOn = false;
+        delete saved.loom;
         if (saved.hideUntilInput === false) saved.revealOn = 'start';
         delete saved.hideUntilInput;
         // carry the old default phrase forward to the current one
@@ -120,6 +123,8 @@
         if (!(saved.rev >= 2)) delete saved.letterCase;
         // …and the stronger default stretch
         if (!(saved.rev >= 3)) delete saved.stretch;
+        // …and equal-height (capital) letters
+        if (!(saved.rev >= 4)) delete saved.letterCase;
         delete saved.rev;
         return { ...DEFAULTS, ...saved };
       }
@@ -127,7 +132,7 @@
     return { ...DEFAULTS };
   }
   function saveSettings() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 3 })); } catch (_) { /* ignore */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 4 })); } catch (_) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- state
@@ -135,7 +140,8 @@
 
   const state = {
     value: 0,          // 0..12
-    suitOffset: 0,     // suit index when theta's quadrant is 0
+    suitOffset: 0,     // suit index when suitTick is 0
+    suitTick: 0,       // how many suit steps the image has been turned (see trackSuit)
     theta: 0,          // image rotation (radians, relative to the device)
     s: 1,              // zoom
     pan: { x: 0, y: 0 },
@@ -157,11 +163,11 @@
 
   // ---------------------------------------------------------------- cards
   const suitKeys = () => S.suitOrder.split('');
-  const quadrant = (theta = state.theta) => Math.round(theta / Q);
+  const suitStep = () => (clamp(S.suitStepDeg, 5, 90) * Math.PI) / 180;
   function currentCard() {
     if (state.locked) return state.locked;
     const keys = suitKeys();
-    const suitKey = keys[mod(state.suitOffset + quadrant(), 4)];
+    const suitKey = keys[mod(state.suitOffset + state.suitTick, 4)];
     return { value: state.value, suitKey };
   }
   const cardKey = (c) => `${c.value}${c.suitKey}`;
@@ -172,6 +178,19 @@
       .replace(/\{suit\}/gi, SUITS[c.suitKey].name);
   }
   /** Lowercase letters stretch into loops and loose ends; capitals into obvious bars. */
+  /**
+   * Capitals are all one height, so the whole phrase is one even band. In
+   * lowercase the short letters make the band and the tall ones stick out.
+   */
+  const allCaps = () => S.letterCase === 'upper';
+  // In capitals only the tail of the Q hangs below the line. It is stretched
+  // this much less than the letters, so that it still fits on the screen.
+  const CAPS_TAIL = 0.25;
+  /** Does a line of capitals have anything hanging below it? */
+  const hasTail = (text) => /[^A-PR-Z0-9 \u00A0.!?'|\n-]/.test(text);
+  const tallRatio = () => (allCaps() ? CAPS_TAIL : clamp(S.ascender, 0.1, 1));
+  /** The letter whose height is the height of the band. */
+  const bodyProbe = () => (allCaps() ? 'H' : 'x');
   function applyCase(text, first) {
     if (S.letterCase === 'upper') return text.toUpperCase();
     const low = text.toLowerCase();
@@ -185,9 +204,19 @@
    * covers the page, plus the numbers that place the two phrases and decide
    * which letter stems run on as loose threads.
    */
-  function buildWeave(seed) {
+  function buildWeave(seed, base, fixed = false) {
     const r = mulberry32(seed);
-    return { seed, jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() } };
+    return {
+      seed,
+      // Once a message is locked in, the loom keeps the message's scale at
+      // every zoom instead of following the zoom (see paintLoom).
+      fixed,
+      jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() },
+      // Where the loom's pages sit: centre, angle and scale of page (0, 0).
+      // Locking in re-bases this onto the message, so the message is one
+      // page of the loom and the pages around it line up with it.
+      base: base || { x: MID, y: MID, rot: 0, k: 1 },
+    };
   }
 
   /** Deterministic pseudo-random number in [0, 1) from five integers. */
@@ -202,131 +231,115 @@
     return (h >>> 0) / 4294967296;
   }
 
+  // ---------------------------------------------------------------- the page
   /**
-   * The loom: an endless, self-similar field of warp and weft threads.
-   *
-   * Threads live on octaves. Octave L has one thread column every
-   * LOOM_PITCH / 2^L image units, and each column is a run of long segments.
-   * At zoom z every octave up to log2(z) is drawn, and the next one fades in,
-   * so zooming in keeps revealing new threads between the old ones. Thread
-   * thickness, the gap of a pair, arches and bars are fixed sizes on screen,
-   * so the loom looks the same, and as dense as the message, at every zoom.
-   * Everything comes from a hash of (seed, octave, column, segment), so it
-   * needs no storage and no edges.
-   *
-   * The shapes are those of stretched letters: stems, pairs of stems joined
-   * by a fat tapered arch, short thick bars. They spell nothing.
-   *
-   * V is { w, h, cx, cy, rot, zoom, px, camX, camY }: the canvas size, where
-   * on it the camera point (camX, camY in image units) sits, the rotation,
-   * the zoom, and px per image unit at zoom 1. Returns paths in pixels from
-   * (cx, cy), in the rotated frame, for layer dir (0 = warp, 1 = weft).
+   * How a phrase read from `edge` fills the screen (layout units, zoom 1):
+   * it runs the full length of one side and is stretched across the other.
+   * The ascenders and descenders have to fit on screen too, or an h reads as
+   * an n. At full stretch they would take nearly half the screen, so they are
+   * stretched less than the bodies of the letters (see `S.ascender`), which
+   * leaves the bodies most of the screen.
    */
-  function buildLoom(V, seed, dir) {
-    const out = { steady: new Path2D(), fading: new Path2D(), fade: 0 };
-    const amount = S.loom;
-    if (!(amount > 0)) return out;
-    const k = V.px * V.zoom;   // px per image unit
-    const u = V.px;            // px per unit at zoom 1: for sizes fixed on screen
-    const st = measureStem('l', 'top');
-    const w = Math.max(1, (st ? st.x1 - st.x0 : 0.07) * 48 * u); // as thick as the letters' stems
-    const M = 520 * u;         // margin, so shapes that start off screen still show
-
-    // the visible rectangle, in px from the centre, in the rotated frame
-    const cos = Math.cos(-V.rot), sin = Math.sin(-V.rot);
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const [x, y] of [[0, 0], [V.w, 0], [V.w, V.h], [0, V.h]]) {
-      const dx = x - V.cx, dy = y - V.cy;
-      const a = dx * cos - dy * sin, b = dx * sin + dy * cos;
-      x0 = Math.min(x0, a); x1 = Math.max(x1, a);
-      y0 = Math.min(y0, b); y1 = Math.max(y1, b);
+  function pageSlot(edge, text = '') {
+    const W = view.visW, H = view.visH;                 // a page is exactly one screen
+    const sideways = Math.abs(EDGES[edge].U[0]) > 0.5; // stretched across the screen
+    const xh = measurePhrase('x').xh;
+    const run = allCaps() ? 0.995 : 0.985;
+    const len = sideways ? W : H;                       // room along the stretch
+    let body, shift = 0;
+    if (allCaps()) {
+      // Capitals run the full length of the page, so neighbouring pages meet
+      // end to end with no seam. Only a phrase with a tail in it (the Q of
+      // QUEEN) is a little shorter, and moved up, to keep its tail on screen.
+      body = 1;
+      if (hasTail(text)) {
+        mctx.font = `${S.weight} 100px ${FONT}`;
+        const tail = (mctx.measureText('Q').actualBoundingBoxDescent || 12) / 100;
+        body = 0.995 / (1 + (tail / xh) * CAPS_TAIL);
+        shift = (len * (1 - body)) / 2;
+      }
+    } else {
+      // What is left over after the (squashed) ascenders and descenders.
+      body = 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
     }
-    // "across" a thread and "along" it
-    const [a0, a1, l0, l1] = dir ? [y0, y1, x0, x1] : [x0, x1, y0, y1];
-    const camA = dir ? V.camY : V.camX, camL = dir ? V.camX : V.camY;
+    return { width: (sideways ? H : W) * run, maxBand: len * body, shift };
+  }
 
-    const poly = (path, pts) => {
-      const m = dir ? pts.map(([a, l]) => [l, a]) : pts;
-      let area = 0;
-      for (let n = 0; n < m.length; n++) {
-        const p = m[n], q = m[(n + 1) % m.length];
-        area += p[0] * q[1] - q[0] * p[1];
-      }
-      if (area < 0) m.reverse(); // one winding for everything, so overlaps add up
-      path.moveTo(m[0][0], m[0][1]);
-      for (let n = 1; n < m.length; n++) path.lineTo(m[n][0], m[n][1]);
-      path.closePath();
-    };
-    const lo = l0 - M, hi = l1 + M;
-    const stem = (path, a, la, lb) => {
-      la = Math.max(la, lo); lb = Math.min(lb, hi);
-      if (lb > la) poly(path, [[a - w / 2, la], [a + w / 2, la], [a + w / 2, lb], [a - w / 2, lb]]);
-    };
-    // two stems joined at one end by a tapered arch, like the top of an n
-    const arch = (path, aL, aR, lEnd, sgn, A, t) => {
-      if (lEnd < lo || lEnd > hi) return;
-      const c = (aL + aR) / 2, half = (aR - aL) / 2, N = 14;
-      const pts = [];
-      for (let n = 0; n <= N; n++) {
-        const g = (Math.PI * n) / N;
-        pts.push([c - (half + w / 2) * Math.cos(g), lEnd + sgn * A * Math.sin(g)]);
-      }
-      for (let n = 0; n <= N; n++) {
-        const g = (Math.PI * n) / N;
-        pts.push([c + (half - w / 2) * Math.cos(g), lEnd + sgn * (A - t) * Math.sin(g)]);
-      }
-      poly(path, pts);
-    };
-
-    const lz = Math.log2(V.zoom);
-    const top = Math.floor(lz);
-    const f = lz - top;
-    out.fade = f * f * (3 - 2 * f);
-    const pitch0 = LOOM_PITCH / Math.pow(amount, 0.9);
-    for (let L = top + 1; L >= top - 9; L--) {
-      const path = L === top + 1 ? out.fading : out.steady;
-      const pitch = pitch0 * Math.pow(2, -L);   // image units between columns
-      const cell = pitch * 170;                 // one segment per cell along a column
-      const key = dir * 128 + L + 64;
-      const i0 = Math.floor((camA + (a0 - M) / k) / pitch) - 1, i1 = Math.ceil((camA + (a1 + M) / k) / pitch);
-      const j0 = Math.floor((camL + lo / k) / cell) - 1, j1 = Math.ceil((camL + hi / k) / cell);
-      for (let i = i0; i <= i1; i++) {
-        const a = ((i + 0.15 + 0.7 * hash(seed, key, i, 0x5eed, 0)) * pitch - camA) * k;
-        for (let j = j0; j <= j1; j++) {
-          const h = (n) => hash(seed, key, i, j, n);
-          const len = cell * (h(1) < 0.3 ? 0.07 + 0.16 * h(2) : 0.3 + 0.8 * h(2));
-          const start = (j + 0.6 * h(3)) * cell;
-          const la = (start - camL) * k, lb = (start + len - camL) * k;
-          if (lb < lo || la > hi) continue;
-          stem(path, a, la, lb);
-          if (h(4) > 0.5) {
-            // a second stem close by, usually joined to the first
-            const d = (16 + 14 * h(5)) * u;
-            const A = Math.min((180 + 260 * h(9)) * u, (lb - la) * 0.45), t = Math.min((45 + 50 * h(10)) * u, A * 0.5);
-            const join = h(6);
-            let qa = la, qb = lb;
-            if (join < 0.75) {
-              if (join < 0.35 || join >= 0.6) arch(path, a, a + d, la, -1, A, t);
-              if (join >= 0.35) arch(path, a, a + d, lb, 1, A, t);
-            } else {
-              qa = la + h(7) * 400 * u;
-              qb = lb - h(8) * 400 * u;
-            }
-            stem(path, a + d, qa, qb);
-          }
-          // thick portions: a short bar now and then
-          for (let n = 0; n < 2; n++) {
-            if (h(11 + n * 4) > (n ? 0.2 : 0.5)) continue;
-            const pos = la + h(12 + n * 4) * (lb - la);
-            const across = (12 + 10 * h(13 + n * 4)) * u, along = (45 + 50 * h(14 + n * 4)) * u;
-            if (pos + along < lo || pos - along > hi) continue;
-            poly(path, [[a - across / 2, pos - along / 2], [a + across / 2, pos - along / 2],
-              [a + across / 2, pos + along / 2], [a - across / 2, pos + along / 2]]);
-          }
-        }
-      }
+  const GAP = '  '; // between repeats of a phrase: two word spaces
+  /**
+   * A short phrase cannot reach the far end of a long side however far it is
+   * letter-spaced, so it is repeated along the line until it does.
+   */
+  function repeatToFill(text, slot) {
+    if (/[|\n]/.test(text) || !text.trim()) return text;
+    const St = Math.min(MAX_STRETCH, S.stretch);
+    const m = measurePhrase(text);
+    // Pick the number of copies that needs the least letter-spacing to reach
+    // the end. Slightly too many is better than too few: the type just gets
+    // a little smaller, whereas too few leaves the letters far apart.
+    const emMax = slot.maxBand / (St * m.xh);
+    let n = 1, best = Infinity;
+    for (let k = 1; k <= 8; k++) {
+      const spread = slot.width / ((k * m.nat + (k - 1) * 0.5) * emMax); // >1: letter-spaced, <1: shrunk
+      const cost = spread >= 1 ? Math.log(spread) : -2.5 * Math.log(spread);
+      if (cost < best) { best = cost; n = k; }
     }
-    return out;
+    return n > 1 ? Array(n).fill(text.trim()).join(GAP) : text;
+  }
+
+  // Letters in roughly the proportions of English, without the diagonal ones.
+  const LETTERS = 'eeeeeeeeeeeettttttttaaaaaaaaoooooooiiiiiiinnnnnnnsssssshhhhhhrrrrrrddddllllcccuuummffggppbbyw';
+  /** Nonsense words, about `ems` wide at the current weight. */
+  function gibberish(rnd, ems) {
+    let out = '';
+    for (let guard = 0; guard < 60; guard++) {
+      const len = 2 + Math.floor(rnd() * rnd() * 7);
+      let word = '';
+      for (let n = 0; n < len; n++) word += LETTERS[Math.floor(rnd() * LETTERS.length)];
+      out += (out ? ' ' : '') + word;
+      if (measurePhrase(applyCase(out, false)).nat >= ems) break;
+    }
+    return applyCase(out, false);
+  }
+
+  /**
+   * The loom is made of the same thing as the message: pages of stretched
+   * lettering, one phrase across and one down, except that the letters are
+   * nonsense. Pages tile the plane, so the loom has no edges, and they exist
+   * at every power-of-two scale, so zooming in keeps finding new ones the
+   * same size on screen. Each page is generated from (seed, scale, column,
+   * row) when first needed and then cached.
+   */
+  const pageCache = new Map();
+  function loomPage(seed, L, layer, ci, cj) {
+    const key = `${seed}|${L}|${layer}|${ci}|${cj}`;
+    if (pageCache.has(key)) return pageCache.get(key);
+    if (pageCache.size > 240) pageCache.clear();
+    const St = Math.min(MAX_STRETCH, S.stretch);
+    const xh = measurePhrase('x').xh;
+    const edge = layer ? S.edgeB : S.edgeA;
+    const e = EDGES[edge];
+    const slot = pageSlot(edge);
+    const rnd = mulberry32(Math.floor(hash(seed, L + 64, ci, cj, layer) * 4294967296));
+    const em = slot.maxBand / (St * xh);
+    const g = layoutSolid(gibberish(rnd, slot.width / (em * 1.3)), slot.width, slot.maxBand, rnd, 1, 0.7);
+    const page = g && { lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, xhU: g.xhU, ra: g.ra, St: g.St, ox: MID, oy: MID, U: e.U, R: e.R };
+    pageCache.set(key, page);
+    return page;
+  }
+  /**
+   * The two phrases of the loom are laid out independently, and neither is
+   * on a neat grid. Lettering that is stretched down the image sits in
+   * columns, and each column is shifted up or down by its own random amount;
+   * lettering stretched across sits in rows, each shifted sideways. So the
+   * places where one page's letters end and the next begin never line up
+   * across the loom. The columns and rows themselves are shifted too (n =
+   * null), so nothing lines up with the message either: when it is locked
+   * in, the loom's threads simply run up to it and stop wherever they happen
+   * to be. Returns the shift as a fraction of a page.
+   */
+  function stagger(seed, L, layer, n) {
+    return n === null ? hash(seed, L + 64, layer * 7 + 5, 0x2f, 0x77) : hash(seed, L + 64, layer * 7 + 3, n, 0x51ab);
   }
 
   // ---------------------------------------------------------------- messages
@@ -399,7 +412,7 @@
     const n = lines.length;
     const setFont = () => { mctx.font = `${S.weight} 100px ${FONT}`; };
     setFont();
-    const xh = (mctx.measureText('x').actualBoundingBoxAscent || 52) / 100; // of the em
+    const xh = (mctx.measureText(bodyProbe()).actualBoundingBoxAscent || 52) / 100; // band height, of the em
     const kRight = {};
     for (const ch of 'kK') kRight[ch] = (mctx.measureText(ch).actualBoundingBoxRight || 50) / 100;
     const lineGap = 0.8;                       // gap between lines, in x-heights
@@ -417,6 +430,10 @@
     const pitch = xhU * (1 + lineGap);
     const total = n * xhU + (n - 1) * xhU * lineGap;
 
+    // Ascenders and descenders are stretched only `ra` as much as the bodies.
+    // Heights (in ems above the baseline) go through this before the stretch.
+    const ra = tallRatio();
+    const squash = (ey) => (ey > xh ? xh + (ey - xh) * ra : ey < 0 ? ey * ra : ey);
     const extras = new Path2D();
     // Every shape is wound the same way, so overlapping pieces add up
     // instead of cancelling under the non-zero fill rule.
@@ -456,7 +473,7 @@
       const placed = [];
       chars.forEach((ch, ci) => {
         const a = adv[i][ci] * em;
-        const X = (ex) => x + ex * em, Y = (ey) => base - ey * em;
+        const X = (ex) => x + ex * em, Y = (ey) => base - squash(ey) * em;
         if (ch === ' ') {
           // above 100%, some word gaps get a stray thread right through the block
           if (n === 1 && dens > 1 && rnd() < (dens - 1) * 0.8) {
@@ -500,11 +517,17 @@
         }
         x += a + track;
       });
-      return { chars: placed, y: base };
+      // (a line of capitals with no tails can be drawn in one go)
+      return { chars: placed, y: base, plain: allCaps() && !hasTail(ln) };
     });
     // the area the phrase needs clear of loom threads (unstretched, y down)
-    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + (0.83 - xh) * em, down: total / 2 + 0.31 * em };
-    return { lines: out, extras, box, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
+    // (Capitals fill their band. There the cleared area stops a little short
+    // of the ends of the letters, so the loom's threads run into the message
+    // instead of leaving a pale frame around it.)
+    const box = allCaps()
+      ? { hw: textW / 2 - em * 0.1, up: total * 0.487, down: hasTail(t) ? total / 2 + em * 0.2 * ra : total * 0.487 }
+      : { hw: textW / 2 + em * 0.25, up: total / 2 + Math.max(0.04, 0.83 - xh) * em * ra, down: total / 2 + 0.31 * em * ra };
+    return { lines: out, extras, box, em, xhU, ra, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
 
   /** Width of a phrase in ems (its longest line), and the font's x-height. */
@@ -512,7 +535,7 @@
     mctx.font = `${S.weight} 100px ${FONT}`;
     const lines = text.replace(/[ \t]+/g, ' ').trim().split(/\s*[|\n]\s*/).filter(Boolean);
     const nat = Math.max(0.01, ...lines.map((ln) => mctx.measureText(ln).width / 100));
-    return { nat, xh: (mctx.measureText('x').actualBoundingBoxAscent || 52) / 100 };
+    return { nat, xh: (mctx.measureText(bodyProbe()).actualBoundingBoxAscent || 52) / 100 };
   }
 
   /**
@@ -528,7 +551,7 @@
     return { x: MID + dx * cos - dy * sin, y: MID + dx * sin + dy * cos, k: 1 / state.s };
   }
 
-  function buildMessage(card, weave, q, frame) {
+  function buildMessage(card, weave, rot, frame) {
     const msgs = [
       { text: applyCase(S.phraseA, true), edge: S.edgeA },
       { text: applyCase(cardPhrase(card), false), edge: S.edgeB },
@@ -557,28 +580,14 @@
         return { c: at([s * A.U[0], s * A.U[1]], j.u * 10, j.r * 8, e), bw: ext(e.R) * 0.9, mb: bl * 0.8 };
       });
     } else if (S.layout === 'overlap') {
-      // Classic look: one rectangle that both phrases fill completely.
-      // Phrase 1 runs across it and is stretched down it; phrase 2 the other
-      // way round. Each is letter-spaced to reach the far side, so there is
-      // no dead area where only one phrase shows.
-      // Across the screen there is less room than down it: the ascenders
-      // and descenders must mostly stay on screen, or an h reads as an n.
-      const St = Math.min(MAX_STRETCH, S.stretch);
-      const m0 = measurePhrase(msgs[0].text);
-      const acrossScreen = view.visW * 0.62, downScreen = view.visH * 0.52;
-      const sideways = Math.abs(A.U[0]) > 0.5;       // is phrase 1 stretched across the screen?
-      const X = sideways ? downScreen : acrossScreen; // extent along phrase 1's reading direction
-      const m1 = measurePhrase(msgs[1].text);
-      // Tall enough that phrase 1 is not squeezed, but not so tall that a
-      // short card name has to be spaced out to more than ~1.7× its width.
-      const Y = Math.min(sideways ? acrossScreen : downScreen,
-        (X * St * m0.xh) / m0.nat, (1.7 * m1.nat * X) / (St * m0.xh));
-      regions = msgs.map((m, i) => {
-        const e = EDGES[m.edge];
-        return {
-          c: at([0, 0], j.u * 8 * (i ? -1 : 1), j.r * 8, e),
-          bw: i ? Y : X, mb: i ? X : Y, track: 0.7, exact: true,
-        };
+      // The message takes up the whole screen. Phrase 1 runs the full width
+      // and is stretched down the screen; phrase 2 runs the full height and
+      // is stretched across. A phrase too short to reach is repeated.
+      regions = msgs.map((m) => {
+        const slot = pageSlot(m.edge, m.text);
+        m.text = repeatToFill(m.text, slot);
+        const U = EDGES[m.edge].U;
+        return { c: [MID + U[0] * slot.shift, MID + U[1] * slot.shift], bw: slot.width, mb: slot.maxBand, track: 0.7, exact: true };
       });
     } else {
       // Split: each message gets its own half of the cloth, so the two
@@ -600,18 +609,20 @@
       const sizeJitter = regions[i].exact ? 1 : 0.94 + 0.06 * (i ? 1 - j.band : j.band);
       const g = layoutSolid(m.text, regions[i].bw, regions[i].mb, rnd, sizeJitter, regions[i].track);
       if (!g) return null;
-      glyphs.push({ lines: g.lines, extras: g.extras, box: g.box, font: g.font, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
+      glyphs.push({ lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, xhU: g.xhU, ra: g.ra, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
       return { textW: g.textW, bandLen: g.bandLen, lines: g.text, St: g.St, edge: m.edge };
     });
-    return { glyphs, q, frame: frame || { x: MID, y: MID, k: 1 }, key: cardKey(card), info, card };
+    // rot: the image rotation at which the message is upright on screen
+    return { glyphs, rot, frame: frame || { x: MID, y: MID, k: 1 }, key: cardKey(card), info, card };
   }
 
   // ---------------------------------------------------------------- scene
   function rebuild({ fadeMs = 0, newWeave = true } = {}) {
-    const weave = newWeave || !scene ? buildWeave(state.seed) : scene.weave;
+    clearPages(); // pages depend on the settings and the screen
+    const weave = newWeave || !scene ? buildWeave(state.seed, scene && scene.weave.base) : scene.weave;
     // an existing message stays where it was woven; a new one goes mid-screen
     const frame = scene && scene.msg ? scene.msg.frame : currentFrame();
-    const msg = state.revealed ? buildMessage(currentCard(), weave, quadrant(), frame) : null;
+    const msg = state.revealed ? buildMessage(currentCard(), weave, scene && scene.msg ? scene.msg.rot : state.theta, frame) : null;
     setScene({ weave, msg }, fadeMs);
   }
   function setScene(next, fadeMs) {
@@ -631,14 +642,13 @@
     updateIndicator();
     if (!state.revealed) return;
     const card = currentCard();
-    const q = quadrant();
-    if (!scene.msg || cardKey(card) !== scene.msg.key) {
+    // Until it is locked the message follows the view: it is rewoven when the
+    // card changes or the picture has been turned, so it is always upright.
+    // Once locked it is part of the loom and turns with it.
+    const turned = scene.msg && Math.abs(wrapPi(scene.msg.rot - state.theta)) > 0.004;
+    if (!scene.msg || cardKey(card) !== scene.msg.key || (turned && !state.locked)) {
       const dur = fadeMs !== undefined ? fadeMs : (scene.msg ? 380 : 900);
-      setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, q, currentFrame()) }, dur);
-    } else if (scene.msg.q !== q) {
-      // Same card ⇒ same suit ⇒ q differs by whole turns: visually identical.
-      // (Once locked the message is part of the sheet and turns with it.)
-      if (!state.locked) scene.msg.q = q;
+      setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, state.theta, currentFrame()) }, dur);
     }
   }
 
@@ -674,8 +684,9 @@
       visH: physH / fit,
     };
     if (scene && (Math.abs((prevVis || 0) - view.visW) > 1 || Math.abs((prevVisH || 0) - view.visH) > 1)) {
+      clearPages();
       const old = scene.msg;
-      scene = { weave: scene.weave, msg: old ? buildMessage(currentCard(), scene.weave, old.q, old.frame) : null };
+      scene = { weave: scene.weave, msg: old ? buildMessage(currentCard(), scene.weave, old.rot, old.frame) : null };
       fade = null;
     }
     requestDraw();
@@ -683,7 +694,7 @@
 
   const msgTransform = (c, m) => {
     c.translate(m.frame.x, m.frame.y);
-    c.rotate(-m.q * Q);
+    c.rotate(-m.rot);
     c.scale(m.frame.k, m.frame.k);
     c.translate(-MID, -MID);
   };
@@ -691,18 +702,13 @@
   const glyphTransform = (c, g) => c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
 
   /**
-   * Where the loom must keep clear of the message. A thread only gets in the
-   * way of the phrase that is stretched along it (tilted, it would look like
-   * a letter stem), so each layer is cleared from that phrase's box only and
-   * runs right up to the block everywhere else.
+   * Where the loom must keep clear of the message: under both phrases. The
+   * message can sit at any angle to the loom, so any loom lettering under it
+   * would strike through the words.
    */
-  function clearZones(sc, dir) {
+  function clearZones(sc) {
     const m = sc && sc.msg;
-    if (!m) return [];
-    const turned = mod(m.q, 2) === 1;
-    return m.glyphs
-      .filter((g) => ((Math.abs(g.U[1]) > 0.5) !== turned) === (dir === 0))
-      .map((g) => ({ m, g }));
+    return m ? m.glyphs.map((g) => ({ m, g })) : [];
   }
   /** Image coordinates → canvas pixels for view V. */
   function worldTransform(c, V) {
@@ -722,10 +728,201 @@
     c.rect(-b.hw, -b.up, b.hw * 2, b.up + b.down);
     c.restore();
   }
-  /** Fill one layer of the loom, optionally only inside one zone, and outside others. */
-  function fillLayer(c, V, loom, alpha, inside, outside) {
-    if (alpha <= 0) return;
+  /**
+   * Draw one stretched phrase. `vis` = [x0, x1, u0, u1]: the part of it on
+   * screen, along its reading direction and along its stretch axis (layout
+   * units from its centre). Letters outside are skipped.
+   */
+  function drawGlyphs(c, g, vis) {
+    c.save();
+    glyphTransform(c, g);
+    c.font = g.font;
+    c.textAlign = 'left';
+    c.textBaseline = 'alphabetic';
+    const onScreen = !vis || (vis[2] < g.box.up * g.St && vis[3] > -g.box.down * g.St);
+    for (const ln of g.lines) {
+      if (!onScreen) break;
+      const chars = vis ? ln.chars.filter((o) => !(o.x > vis[1] || o.x + g.em * 1.2 < vis[0])) : ln.chars;
+      if (!chars.length) continue;
+      if (!(g.ra < 1) || ln.plain) {
+        for (const o of chars) c.fillText(o.ch, o.x, ln.y);
+        continue;
+      }
+      // The letters are drawn in three slices: the bodies (baseline to
+      // x-line) at full stretch, and everything above and below squashed
+      // towards them. Stems are vertical, so the slices join up.
+      const xLine = ln.y - g.xhU, far = g.em * 40, lap = g.em * 0.004;
+      const slices = [
+        [xLine - lap, ln.y + lap, 0, 1],      // bodies (a hair over, to hide the seams)
+        [xLine - far, xLine, xLine, g.ra],    // ascenders, squashed onto the x-line
+        [ln.y, ln.y + far, ln.y, g.ra],       // descenders, squashed onto the baseline
+      ];
+      for (const [y0, y1, pivot, r] of slices) {
+        c.save();
+        c.beginPath();
+        c.rect(vis ? vis[0] - g.em * 2 : -1e6, y0, vis ? vis[1] - vis[0] + g.em * 4 : 2e6, y1 - y0);
+        c.clip();
+        if (r !== 1) {
+          c.translate(0, pivot);
+          c.scale(1, r);
+          c.translate(0, -pivot);
+        }
+        for (const o of chars) c.fillText(o.ch, o.x, ln.y);
+        c.restore();
+      }
+    }
+    c.fill(g.extras); // run-on stems and the redrawn k's
+    c.restore();
+  }
+
+  /**
+   * One layer of the loom (dir 0 = the phrases stretched down the image,
+   * 1 = those stretched across), for whatever pages are on screen. Near the
+   * zoom where one scale of pages hands over to the next, both are drawn and
+   * crossfaded.
+   */
+  // Pages drawn small (zoomed out) are kept as bitmaps: there can be dozens
+  // on screen and each is some eighty stretched letters.
+  const rasterCache = new Map();
+  let rasterPx = 0;
+  function clearPages() {
+    pageCache.clear();
+    rasterCache.clear();
+    rasterPx = 0;
+  }
+  /**
+   * A page as a bitmap with about `res` pixels per layout unit, or null if
+   * none can be made this frame. Along the stretch the lettering changes
+   * 24× more slowly, so the bitmap has half the resolution that way.
+   */
+  function pageBitmap(seed, L, layer, ci, cj, res, budget) {
+    const key = `${seed}|${L}|${layer}|${ci}|${cj}`;
+    let hit = rasterCache.get(key);
+    if (hit && hit.res >= res) return hit;
+    if (budget.left <= 0) return hit || null; // make only a few per frame; the rest follow
+    const g = loomPage(seed, L, layer, ci, cj);
+    if (!g) return null;
+    budget.left--;
+    if (rasterPx > 16e6) { rasterCache.clear(); rasterPx = 0; hit = null; }
+    const W = view.visW, H = view.visH;
+    const down = Math.abs(g.U[1]) > 0.5; // stretched down the page
+    const rx = down ? res : res / 2, ry = down ? res / 2 : res;
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.ceil(W * rx));
+    cv.height = Math.max(1, Math.ceil(H * ry));
+    const g2 = cv.getContext('2d');
+    g2.fillStyle = (THEMES[S.theme] || THEMES.linen).ink;
+    g2.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+    g2.translate(W / 2 - MID, H / 2 - MID);
+    drawGlyphs(g2, g, null);
+    if (hit) rasterPx -= hit.cv.width * hit.cv.height;
+    hit = { cv, res };
+    rasterCache.set(key, hit);
+    rasterPx += cv.width * cv.height;
+    return hit;
+  }
+
+  /**
+   * The loom, for whatever pages are on screen.
+   *
+   * Normally the page scale follows the zoom, so there is always about one
+   * page per screen: near the zoom where one scale hands over to the next,
+   * both are drawn and crossfaded. Once a message is locked in the scale is
+   * fixed to the message's (`weave.fixed`), so the loom around it is exactly
+   * as dense as the message at every zoom.
+   */
+  function paintLoom(c, V0, weave, alpha) {
+    if (!S.loomOn || alpha <= 0) return;
+    // Work in the loom's own frame (see weave.base): the same view, as seen
+    // from a loom that has been moved, turned and scaled.
+    const B = weave.base, seed = weave.seed;
+    const cb = Math.cos(B.rot), sb = Math.sin(B.rot);
+    const ox = (V0.camX - B.x) / B.k, oy = (V0.camY - B.y) / B.k;
+    const V = {
+      ...V0,
+      rot: V0.rot - B.rot,
+      zoom: V0.zoom * B.k,
+      camX: MID + ox * cb - oy * sb,
+      camY: MID + ox * sb + oy * cb,
+    };
     const theme = THEMES[S.theme] || THEMES.linen;
+    const k = V.px * V.zoom;
+    // the screen's bounding box in the loom's coordinates
+    const cos = Math.cos(-V.rot), sin = Math.sin(-V.rot);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of [[0, 0], [V.w, 0], [V.w, V.h], [0, V.h]]) {
+      const dx = (x - V.cx) / k, dy = (y - V.cy) / k;
+      const wx = V.camX + dx * cos - dy * sin, wy = V.camY + dx * sin + dy * cos;
+      x0 = Math.min(x0, wx); x1 = Math.max(x1, wx);
+      y0 = Math.min(y0, wy); y1 = Math.max(y1, wy);
+    }
+    let scales;
+    if (weave.fixed) scales = [[0, 1]];
+    else {
+      const lz = Math.log2(V.zoom);
+      const L0 = Math.round(lz), d = lz - L0;        // d in [-0.5, 0.5]
+      const near = 0.5 - Math.abs(d);                // 0 right at the hand-over
+      scales = [[L0, 1]];
+      if (near < 0.08) {
+        const t = 0.5 + (0.5 * near) / 0.08;
+        scales[0][1] = t;
+        scales.push([L0 + (d > 0 ? 1 : -1), 1 - t]);
+      }
+    }
+    const W = view.visW, H = view.visH;
+    const budget = { left: 12 };
+    let pending = false;
+    c.save();
+    c.fillStyle = theme.ink;
+    for (const [L, a] of scales) {
+      const sc = Math.pow(2, -L);
+      const cw = W * sc, ch = H * sc;
+      const res = k * sc;                          // device px per layout unit of this page
+      const small = res < 0.5;                     // small enough to draw from a bitmap
+      const pad = small ? 0 : 0.6;                 // (lowercase lettering runs on past its page)
+      c.globalAlpha = alpha * a;
+      for (const layer of [0, 1]) {
+        const down = Math.abs(EDGES[layer ? S.edgeB : S.edgeA].U[1]) > 0.5;
+        // m runs over the unshifted direction (columns for lettering that
+        // is stretched down, rows for lettering stretched across)
+        const [lo, hi, size] = down ? [x0, x1, cw] : [y0, y1, ch];
+        const [lo2, hi2, size2] = down ? [y0, y1, ch] : [x0, x1, cw];
+        const shift = stagger(seed, L, layer, null);
+        const m0 = Math.floor((lo - MID) / size - shift + 0.5 - pad), m1 = Math.ceil((hi - MID) / size - shift - 0.5 + pad);
+        for (let m = m0; m <= m1; m++) {
+          const off = stagger(seed, L, layer, m);
+          const n0 = Math.floor((lo2 - MID) / size2 - off + 0.5 - pad), n1 = Math.ceil((hi2 - MID) / size2 - off - 0.5 + pad);
+          for (let n = n0; n <= n1; n++) {
+            const ci = down ? m : n, cj = down ? n : m;
+            const px = MID + (down ? m + shift : n + off) * cw, py = MID + (down ? n + off : m + shift) * ch;
+            worldTransform(c, V);
+            c.translate(px, py);
+            c.scale(sc, sc);
+            if (small) {
+              const bmp = pageBitmap(seed, L, layer, ci, cj, Math.pow(2, Math.round(Math.log2(res))), budget);
+              if (bmp) c.drawImage(bmp.cv, -W / 2, -H / 2, W, H);
+              else pending = true;
+              continue;
+            }
+            const g = loomPage(seed, L, layer, ci, cj);
+            if (!g) continue;
+            c.translate(-MID, -MID);
+            // which of its letters are on screen
+            const ax = (x0 - px) / sc, bx = (x1 - px) / sc, ay = (y0 - py) / sc, by = (y1 - py) / sc;
+            const p = ax * g.R[0] + ay * g.R[1], q = bx * g.R[0] + by * g.R[1];
+            const up = ax * g.U[0] + ay * g.U[1], uq = bx * g.U[0] + by * g.U[1];
+            drawGlyphs(c, g, [Math.min(p, q), Math.max(p, q), Math.min(up, uq), Math.max(up, uq)]);
+          }
+        }
+      }
+    }
+    c.restore();
+    if (pending) requestDraw(); // the remaining bitmaps are made over the next frames
+  }
+
+  /** Paint the loom, optionally only inside one zone, and outside others. */
+  function fillLayer(c, V, weave, alpha, inside, outside) {
+    if (alpha <= 0) return;
     c.save();
     if (inside) {
       c.beginPath();
@@ -741,33 +938,22 @@
       addZone(c, V, z);
       c.clip('evenodd');
     }
-    c.setTransform(1, 0, 0, 1, 0, 0);
-    c.translate(V.cx, V.cy);
-    c.rotate(V.rot);
-    c.fillStyle = theme.ink;
-    c.globalAlpha = alpha;
-    c.fill(loom.steady);
-    if (loom.fade > 0.01) {
-      c.globalAlpha = alpha * loom.fade;
-      c.fill(loom.fading);
-    }
+    paintLoom(c, V, weave, alpha);
     c.restore();
   }
 
   /**
-   * The loom threads. With `prev` (a scene on the same weave) and
-   * 0 ≤ e ≤ 1 it draws a crossfade: threads outside every clear zone stay
-   * steady, and only those entering or leaving a zone fade.
+   * The loom. With `prev` (a scene on the same weave) and 0 ≤ e ≤ 1 it draws
+   * a crossfade: lettering outside every clear zone stays steady, and only
+   * what is entering or leaving a zone fades.
    */
   function drawSheet(c, sc, alpha, V, prev = null, e = 1) {
-    for (const dir of [0, 1]) {
-      const loom = buildLoom(V, sc.weave.seed, dir);
-      const now = clearZones(sc, dir), was = clearZones(prev, dir);
-      fillLayer(c, V, loom, alpha, null, [...now, ...was]);
-      if (!prev) continue;
-      for (const z of now) fillLayer(c, V, loom, alpha * (1 - e), z, was); // being cleared
-      for (const z of was) fillLayer(c, V, loom, alpha * e, z, now);       // growing back
-    }
+    const weave = sc.weave;
+    const now = clearZones(sc), was = clearZones(prev);
+    fillLayer(c, V, weave, alpha, null, [...now, ...was]);
+    if (!prev) return;
+    for (const z of now) fillLayer(c, V, weave, alpha * (1 - e), z, was); // being cleared
+    for (const z of was) fillLayer(c, V, weave, alpha * e, z, now);       // growing back
   }
 
   /** The hidden message, if it has been woven in. */
@@ -780,18 +966,7 @@
     c.globalAlpha = alpha;
     msgTransform(c, m);
     c.fillStyle = theme.ink;
-    for (const g of m.glyphs) {
-      c.save();
-      glyphTransform(c, g);
-      c.font = g.font;
-      c.textAlign = 'left';
-      c.textBaseline = 'alphabetic';
-      for (const ln of g.lines) {
-        for (const o of ln.chars) c.fillText(o.ch, o.x, ln.y);
-      }
-      c.fill(g.extras); // run-on stems and the redrawn k's
-      c.restore();
-    }
+    for (const g of m.glyphs) drawGlyphs(c, g, null);
     c.restore();
   }
 
@@ -856,6 +1031,7 @@
     state.s = lerp(anim.from.s, anim.to.s, e);
     state.pan.x = lerp(anim.from.px, anim.to.px, e);
     state.pan.y = lerp(anim.from.py, anim.to.py, e);
+    trackSuit();
     if (t >= 1) {
       const done = anim.done;
       anim = null;
@@ -876,8 +1052,11 @@
   }
 
   function settle() {
-    const theta = quadrant() * Q;
-    const s = clamp(state.s, ZOOM_MIN, ZOOM_MAX);
+    const theta = state.theta; // the picture stays at whatever angle it was turned to
+    // Locked: the range is relative to the message, from six pages across the
+    // screen down to an eighth of a page.
+    const lockK = state.locked && scene && scene.msg ? scene.msg.frame.k : 0;
+    const s = lockK ? clamp(state.s, 1 / (6 * lockK), 8 / lockK) : clamp(state.s, ZOOM_MIN, ZOOM_MAX);
     const lim = ROAM * view.fit * s;
     const px = clamp(state.pan.x, -lim, lim), py = clamp(state.pan.y, -lim, lim);
     const moved = Math.abs(theta - state.theta) > 1e-4 || Math.abs(s - state.s) > 1e-4 ||
@@ -908,17 +1087,22 @@
     if (S.liveUpdate) liveRebuild();
   }
 
-  let lastQuadrant = 0;
-  function trackQuadrant() {
-    const q = quadrant();
-    if (q !== lastQuadrant) {
-      lastQuadrant = q;
-      if (state.locked) return;
-      if (S.revealOn === 'input') state.revealed = true;
-      haptic();
-      updateIndicator();
-      if (S.liveUpdate) liveRebuild();
-    }
+  /**
+   * Turning the picture steps the suit: one suit every `suitStepDeg` degrees,
+   * so by default all four go by within a quarter turn. There is a little
+   * slack around each boundary so that a hand resting near one does not make
+   * the suit flicker.
+   */
+  function trackSuit() {
+    const step = suitStep();
+    let moved = 0;
+    while (state.theta - state.suitTick * step > step * 0.6) { state.suitTick++; moved++; }
+    while (state.theta - state.suitTick * step < -step * 0.6) { state.suitTick--; moved++; }
+    if (!moved || state.locked) return;
+    if (S.revealOn === 'input') state.revealed = true;
+    haptic();
+    updateIndicator();
+    if (S.liveUpdate) liveRebuild();
   }
 
   /**
@@ -930,16 +1114,22 @@
     if (state.locked || !scene) return;
     state.locked = currentCard();
     state.revealed = true;
-    commit();
+    // The message is woven in upright, filling the screen, whatever angle the
+    // picture is at. The loom is laid out afresh around it, with the message
+    // as its centre page, so that zooming out shows the rest of the loom
+    // lined up with the message and running into it.
+    const frame = currentFrame();
+    const weave = buildWeave(scene.weave.seed, { x: frame.x, y: frame.y, rot: state.theta, k: frame.k }, true);
+    setScene({ weave, msg: buildMessage(state.locked, weave, state.theta, frame) }, 900);
     try { if (S.haptics && navigator.vibrate) navigator.vibrate([12, 60, 12]); else { lastHapticAt = 0; haptic(); } } catch (_) { /* ignore */ }
     updateIndicator();
   }
   /** Bring the woven message back to the middle of the screen, upright. */
   function recentre() {
-    const to = { s: 1, px: 0, py: 0, theta: quadrant() * Q };
+    const to = { s: 1, px: 0, py: 0, theta: state.theta };
     if (scene && scene.msg) {
       const m = scene.msg, f = m.frame;
-      to.theta = m.q * Q + Math.round((state.theta - m.q * Q) / (4 * Q)) * 4 * Q;
+      to.theta = m.rot + Math.round((state.theta - m.rot) / (4 * Q)) * 4 * Q;
       const a = to.theta - (screenAngle() * Math.PI) / 180;
       to.s = 1 / f.k;
       const kv = view.fit * to.s;
@@ -955,7 +1145,7 @@
     if (!scene || !scene.msg) return; // nothing woven yet: it appears on release
     const card = currentCard();
     if (cardKey(card) === scene.msg.key) return;
-    setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, scene.msg.q, scene.msg.frame) }, 140);
+    setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, scene.msg.rot, scene.msg.frame) }, 140);
   }
 
   function updateIndicator() {
@@ -1031,7 +1221,7 @@
     const lg = Math.log(d / G.d0);
 
     if (S.gestureLock && !G.lock) {
-      if (Math.abs(G.dAng) > (15 * Math.PI) / 180) { G.lock = 'rotate'; G.lgFrozen = lg; }
+      if (Math.abs(G.dAng) > Math.min((7 * Math.PI) / 180, suitStep() * 0.4)) { G.lock = 'rotate'; G.lgFrozen = lg; }
       else if (Math.abs(lg) > Math.log(1.1)) { G.lock = 'pinch'; G.angFrozen = G.dAng; }
     }
     let effLog = lg, effAng = G.dAng;
@@ -1055,7 +1245,7 @@
     const cos = Math.cos(rot), sin = Math.sin(rot);
     state.pan.x = c.x - (vx * cos - vy * sin) - view.cx;
     state.pan.y = c.y - (vx * sin + vy * cos) - view.cy;
-    trackQuadrant();
+    trackSuit();
     requestDraw();
   }
 
@@ -1086,7 +1276,7 @@
       if (now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
         lastTap.t = 0;
         // first double-tap locks the revelation in; after that it recentres
-        if (!state.locked) { lockIn(); settle(); } else recentre();
+        if (!state.locked) lockIn(); else recentre();
         return;
       }
       lastTap = { t: now, x: e.clientX, y: e.clientY };
@@ -1120,7 +1310,7 @@
     if (e.shiftKey || e.altKey) {
       wheelG.ang += delta * 0.004;
       state.theta = wheelG.th0 + wheelG.ang;
-      trackQuadrant();
+      trackSuit();
     } else {
       const dl = -delta * 0.0022;
       wheelG.lg += dl;
@@ -1141,10 +1331,8 @@
       case 'ArrowDown': stepValue(-1); commit(); break;
       case 'ArrowRight':
       case 'ArrowLeft': {
-        const target = (quadrant() + (e.key === 'ArrowRight' ? 1 : -1)) * Q;
-        animateTo({ theta: target }, 260, () => commit());
-        // count the suit change at once
-        const saved = state.theta; state.theta = target; trackQuadrant(); state.theta = saved;
+        const target = (state.suitTick + (e.key === 'ArrowRight' ? 1 : -1)) * suitStep();
+        animateTo({ theta: target }, 200, () => commit());
         break;
       }
       case 'r': case 'R': reweave(); break;
@@ -1162,7 +1350,7 @@
       const card = state.locked;
       state.locked = null;
       state.value = card.value;
-      state.suitOffset = mod(S.suitOrder.indexOf(card.suitKey) - quadrant(), 4);
+      state.suitOffset = mod(S.suitOrder.indexOf(card.suitKey) - state.suitTick, 4);
     }
     state.revealed = S.revealOn === 'start'; // back to a bare loom
     rebuild({ fadeMs: 650 });
@@ -1199,9 +1387,10 @@
   function updateOutputs() {
     form.elements.stretchOut.value = `${(+S.stretch).toFixed(0)}× · view at ~${(Math.asin(1 / S.stretch) * 180 / Math.PI).toFixed(1)}°`;
     form.elements.densityOut.value = `${Math.round(S.density * 100)}%`;
-    form.elements.loomOut.value = `${Math.round(S.loom * 100)}%`;
+    form.elements.ascenderOut.value = `${Math.round(S.ascender * 100)}%`;
     form.elements.weightOut.value = `${Math.round(S.weight)}`;
     form.elements.pinchStepOut.value = `${Math.round((S.pinchStep - 1) * 100)}%`;
+    form.elements.suitStepDegOut.value = `${(+S.suitStepDeg).toFixed(1)}°`;
   }
   function readForm() {
     const next = { ...S };
@@ -1225,13 +1414,13 @@
     // keep the same card when the suit order changes
     if (before.suitOrder !== S.suitOrder) {
       const c = cardWith(before.suitOrder);
-      state.suitOffset = mod(S.suitOrder.indexOf(c) - quadrant(), 4);
+      state.suitOffset = mod(S.suitOrder.indexOf(c) - state.suitTick, 4);
     }
     if (S.revealOn === 'start') state.revealed = true;
     clearTimeout(formTimer);
     formTimer = setTimeout(() => { rebuild({ newWeave: true }); updateIndicator(); drawPreviews(); }, 60);
   });
-  function cardWith(order) { return order[mod(state.suitOffset + quadrant(), 4)]; }
+  function cardWith(order) { return order[mod(state.suitOffset + state.suitTick, 4)]; }
 
   document.getElementById('reset-defaults').addEventListener('click', () => {
     S = { ...DEFAULTS };
@@ -1268,15 +1457,19 @@
     if (!scene) return;
     // Before a card is input nothing is woven in; preview what would be.
     const sc = scene.msg ? scene
-      : { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, quadrant(), currentFrame()) };
+      : { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, state.theta, currentFrame()) };
     const m = sc.msg;
     const info = (m.info || []).find((i) => i && i.edge === edge);
     const St = info ? info.St : S.stretch;
-    const span = 2000;                       // layout units rendered, square
-    const cropW = CLOTH + 80;                // units shown across the preview
-    const scale = cv.width / cropW;          // preview px per unit, across
-    // enough of the stretched axis for the block plus its ascenders/descenders
-    const need = Math.min(span, (info ? info.bandLen : CLOTH) * 1.9);
+    // The message fills the screen, so the preview shows one screen's worth:
+    // the long way of the phrase across, the stretched way squashed.
+    const sideways = Math.abs(EDGES[edge].U[0]) > 0.5;
+    // (the setup panel's small previews show the first 900 units of a long line)
+    const cropW = fitHeight ? Math.min(900, sideways ? view.visH : view.visW) : (sideways ? view.visH : view.visW);
+    const need = sideways ? view.visW : view.visH;    // units along the stretched axis
+    const full = sideways ? view.visH : view.visW;    // the whole line
+    const span = Math.max(full, need) + 40;           // layout units rendered, square
+    const scale = cv.width / cropW;                   // preview px per unit, across
     if (fitHeight) cv.height = Math.round((need / St) * scale) + 20;
     const size = 1600;
     const off = document.createElement('canvas');
@@ -1288,20 +1481,21 @@
     const k = size / span;
     drawScene(c, sc, 1, {
       w: size, h: size, cx: size / 2, cy: size / 2,
-      rot: EDGES[edge].toBottom + m.q * Q,
+      rot: EDGES[edge].toBottom + m.rot,
       zoom: 1 / m.frame.k, px: k,
       camX: m.frame.x, camY: m.frame.y,
     });
     const out = cv.getContext('2d');
     out.fillStyle = theme.bg;
     out.fillRect(0, 0, cv.width, cv.height);
-    const dh = (span / St) * scale;
+    const dh = (need / St) * scale;
     out.imageSmoothingQuality = 'high';
-    out.drawImage(off, ((span - cropW) / 2) * k, 0, cropW * k, size,
+    out.drawImage(off, ((span - full) / 2) * k, ((span - need) / 2) * k, cropW * k, need * k,
       0, (cv.height - dh) / 2, cv.width, dh);
   }
   function drawPreviews() {
     if (!setupDlg.open) return;
+    for (const id of ['pv-a', 'pv-b']) document.getElementById(id).width = 640;
     drawPreview(document.getElementById('pv-a'), S.edgeA, true);
     drawPreview(document.getElementById('pv-b'), S.edgeB, true);
     document.getElementById('pv-a-cap').textContent = `Phrase 1 · from the ${S.edgeA} edge`;
@@ -1341,11 +1535,12 @@
   window.loom = {
     get state() { return { ...state, card: cardKey(currentCard()), phrase: cardPhrase(currentCard()) }; },
     get scene() { return scene; },
+    bench(n = 20) { const t = performance.now(); for (let i = 0; i < n; i++) render(performance.now()); return (performance.now() - t) / n; },
     lockIn, recentre,
     settings: () => ({ ...S }),
     setCard(value, suitKey) {
       state.value = mod(value, 13);
-      state.suitOffset = mod(S.suitOrder.indexOf(suitKey) - quadrant(), 4);
+      state.suitOffset = mod(S.suitOrder.indexOf(suitKey) - state.suitTick, 4);
       state.revealed = true;
       commit(0);
     },
