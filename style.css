@@ -71,6 +71,9 @@ html, body {
   padding-left: max(18px, env(safe-area-inset-left));
   padding-right: max(18px, env(safe-area-inset-right));
 }
+/* the loom fades out behind the header and footer so their text stays legible */
+#top { background: linear-gradient(to bottom, var(--bg) 45%, transparent); }
+#bottom { background: linear-gradient(to top, var(--bg) 50%, transparent); }
 #top {
   top: 0;
   padding-top: max(12px, env(safe-area-inset-top));
@@ -125,6 +128,8 @@ html, body {
   text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 6px var(--bg);
   white-space: nowrap;
 }
+/* locked in: a hairline under the card */
+#ind.locked { border-bottom: 1px solid currentColor; padding-bottom: 3px; }
 #ind .dots { display: inline-flex; gap: 4px; align-items: center; }
 #ind .dots i {
   display: block;

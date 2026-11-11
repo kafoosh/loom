@@ -2,21 +2,21 @@
 
 A tilt-to-read card trick that runs as a static page (GitHub Pages).
 
-The page opens as a sheet of loom threads with nothing hidden in it. Once you secretly enter a card while "adjusting" the image, a denser patch quietly weaves itself into the middle. Tilt the phone and look along it from the charger end, and that patch squashes together into **the card you chose was**. Look from the side and it reads **the seven of hearts**, or whichever card the spectator chose.
+The page opens as an endless loom of threads with nothing hidden in it. You secretly enter a card while "adjusting" the image and double-tap to lock it in, and a patch of the loom quietly reweaves itself in the middle of the screen. Tilt the phone and look along it from the charger end, and that patch squashes together into **the card you chose was**. Look from the side and it reads **the seven of hearts**, or whichever card the spectator chose.
 
 ## The routine
 
-1. Open the page. The spectator can drag, pinch, spin and **Reweave** the threads. At this point it really is only a random loom; there is no message in it.
+1. Open the page. The spectator can drag, zoom, spin and **Reweave** the threads. At this point it really is only a random loom; there is no message in it, however far they zoom.
 2. A card is chosen.
 3. Take the phone back and play with the image while you talk:
    - **Pinch out / in**: value up / down (A → 2 → … → K → A, wraps around)
    - **Twist a quarter turn** clockwise / anticlockwise: next / previous suit (wraps around)
 
    Each step gives a haptic tick, and the faint indicator in the bottom-right corner shows the current card (e.g. `7♥`).
-4. Let go. The sheet snaps square and relaxes to its natural size, and the message fades in at the centre of the screen, sized to fit. Each further input reweaves it for the new card.
+4. **Double-tap** to lock the card in. The message fades in at the centre of the screen, upright and sized to fit, and the indicator gets a thin underline. From now on pinching and twisting only move the picture; the card cannot change.
 5. Tilt from the bottom edge: **the card you chose was**. Turn the phone and tilt from the left edge: **the seven of hearts**.
 
-Other controls: drag with one finger to pan, and double-tap to recentre (the card stays the same). **Reweave** makes a new loom and clears the message, ready for the next performance. If the chosen card happens to be the one already showing in the indicator, pinch one step out and back to weave it in.
+Other controls: drag with one finger to pan. Once locked, double-tap again brings the message back to the centre of the screen. **Reweave** makes a new loom, clears the message and unlocks, ready for the next performance. The indicator keeps the last card, so you can count from it.
 
 ## Setup panel
 
@@ -26,7 +26,7 @@ Other controls: drag with one finger to pan, and double-tap to recentre (the car
 - suit order (CHaSeD or SHoCkeD), pinch sensitivity, gesture lock, haptics
 - indicator style: `7♥`, a code (`no. 07·2`), dots, or off
 - stretch, letter case, letter thickness, how many loose threads and loom threads, layout, and theme
-- whether the message stays hidden until a card is input (on by default)
+- when the message is woven in: on lock-in (the default), as soon as a card is input, or from the start
 - **live previews** that simulate the tilted view, so you can check the text reads before you perform
 
 Settings are saved on the device.
@@ -62,7 +62,9 @@ At a grazing angle (about 2–5° above the screen), foreshortening squashes the
 
 The font is Roboto (variable weight), bundled in `fonts/` under the SIL Open Font License, so the letters look the same on every device.
 
-The loom around the words is generated from a random seed. It is drawn with the same shapes a stretched letter has: long stems, pairs of stems joined by a fat tapered arch, long closed loops and short thick bars. It spells nothing. A loom thread is cleared only where it would read as a letter stem when tilted, which is inside the phrase stretched along it. Everywhere else the threads run right up to the block.
+The loom around the words is generated from a random seed, on the fly, for whatever part of it is on screen. It is drawn with the same shapes a stretched letter has: long stems, pairs of stems joined by a fat tapered arch, and short thick bars. It spells nothing, and it is about as dense as the message, so the message does not stand out as a darker patch.
+
+The loom is self-similar. Threads live on octaves, each with twice as many threads as the last. At any zoom the octaves up to that zoom are drawn and the next one is fading in, while thread thickness and the size of arches and bars stay fixed on screen. Zooming in therefore keeps revealing new threads of the same size between the old ones, and there are no edges to reach. A loom thread is cleared only where it would read as a letter stem when tilted, which is inside the phrase stretched along it. Everywhere else the threads run right up to the block.
 
 Lines that come from the words themselves:
 

@@ -1,20 +1,23 @@
 /*
  * loom — a tilt-to-read card revelation.
  *
- * The page opens as a sheet of loom threads, far bigger than the screen,
- * that can be dragged, zoomed, turned and re-rolled. Nothing is hidden in it.
+ * The page opens as an endless loom of threads that can be dragged, zoomed,
+ * turned and re-rolled. It is self-similar: zooming in keeps revealing new
+ * threads of the same size. Nothing is hidden in it.
  *
- * Secret input:
+ * Secret input (shown only in the faint corner indicator):
  *   – Pinch: each `pinchStep` change of finger distance steps the value.
  *   – Rotate: every quarter turn steps the suit (the image snaps to 90°).
- * When the fingers lift after the first input, two phrases fade in mid-screen,
- * built the way classic tilt-to-read images are:
+ *   – Double-tap: lock the card in. Two phrases fade in mid-screen and stay
+ *     woven into the loom; pinching and turning now only move the picture.
+ *
+ * The phrases are built the way classic tilt-to-read images are:
  *   – Each is small, light, lowercase type, stretched ~24× along one axis only
  *     (phrase 1 vertically, phrase 2 horizontally), and both fill the same
  *     rectangle. Viewed at a grazing angle along that axis, foreshortening
  *     squashes a phrase back into letters.
  *   – Loom threads are cleared only where they would read as letter stems, so
- *     the block sits inside the sheet rather than on top of it.
+ *     the block sits inside the loom rather than on top of it.
  */
 (() => {
   'use strict';
@@ -27,6 +30,9 @@
   // Bundled variable font (fonts/), so the letters look the same on every device.
   const FONT = '"Loom Thread", "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif';
   const MAX_STRETCH = 40;
+  const ZOOM_MIN = 1 / 8, ZOOM_MAX = 64;   // the loom is endless; this is just a sane range
+  const ROAM = 40000;                      // how far (image units) the view may wander
+  const LOOM_PITCH = 27;                   // thread spacing of one loom octave at zoom 1
 
   const SUITS = {
     S: { name: 'SPADES', sym: '♠' },
@@ -74,7 +80,7 @@
     stretch: 24,
     density: 1,
     loom: 1,
-    hideUntilInput: true,
+    revealOn: 'lock',   // 'lock' (double-tap), 'input' (first pinch/twist) or 'start'
     layout: 'overlap',
     weight: 300,
     theme: 'linen',
@@ -106,6 +112,8 @@
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) {
         const saved = JSON.parse(raw);
+        if (saved.hideUntilInput === false) saved.revealOn = 'start';
+        delete saved.hideUntilInput;
         // carry the old default phrase forward to the current one
         if (/^you will pick$/i.test((saved.phraseA || '').trim())) delete saved.phraseA;
         // settings saved before all-lowercase became the default pick it up once
@@ -133,6 +141,7 @@
     pan: { x: 0, y: 0 },
     seed: newSeed(),
     revealed: false,   // has the hidden message been woven in yet?
+    locked: null,      // { value, suitKey } once the revelation is locked in
   };
 
   const canvas = document.getElementById('stage');
@@ -150,6 +159,7 @@
   const suitKeys = () => S.suitOrder.split('');
   const quadrant = (theta = state.theta) => Math.round(theta / Q);
   function currentCard() {
+    if (state.locked) return state.locked;
     const keys = suitKeys();
     const suitKey = keys[mod(state.suitOffset + quadrant(), 4)];
     return { value: state.value, suitKey };
@@ -171,107 +181,152 @@
 
   // ---------------------------------------------------------------- weave
   /**
-   * A weave is the random part of the picture: the sheet of loom threads that
-   * covers the whole page, plus the numbers that place the two phrases and
-   * decide which letter stems run on as loose threads.
+   * A weave is the random part of the picture: the seed of the loom that
+   * covers the page, plus the numbers that place the two phrases and decide
+   * which letter stems run on as loose threads.
    */
   function buildWeave(seed) {
     const r = mulberry32(seed);
-    const jitter = { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() };
-    return { seed, jitter, sheet: buildSheet(mulberry32((seed ^ 0x5bd1e995) >>> 0), S.loom) };
+    return { seed, jitter: { u: (r() - 0.5) * 2, r: (r() - 0.5) * 2, band: r() } };
+  }
+
+  /** Deterministic pseudo-random number in [0, 1) from five integers. */
+  function hash(seed, a, b, c, d) {
+    let h = (seed ^ Math.imul(a + 0x7f4a7c15, 0x9e3779b1)) | 0;
+    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b) ^ Math.imul(b + 0x165667b1, 0xc2b2ae35);
+    h = Math.imul(h ^ (h >>> 13), 0x27d4eb2f) ^ Math.imul(c + 0x1b873593, 0x9e3779b1);
+    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) ^ Math.imul(d + 0x2545f491, 0xc2b2ae35);
+    h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d);
+    h ^= h >>> 12; h = Math.imul(h, 0x297a2d39);
+    h ^= h >>> 15;
+    return (h >>> 0) / 4294967296;
   }
 
   /**
-   * The loom: long warp and weft threads across a sheet far bigger than the
-   * screen, drawn with the same vocabulary a stretched letter has — stems,
-   * pairs of stems joined by a fat tapered arch (a stretched n), long closed
-   * loops (a stretched o), short thick bars (a stretched crossbar) and
-   * lozenges (a stretched dot). None of it spells anything.
+   * The loom: an endless, self-similar field of warp and weft threads.
+   *
+   * Threads live on octaves. Octave L has one thread column every
+   * LOOM_PITCH / 2^L image units, and each column is a run of long segments.
+   * At zoom z every octave up to log2(z) is drawn, and the next one fades in,
+   * so zooming in keeps revealing new threads between the old ones. Thread
+   * thickness, the gap of a pair, arches and bars are fixed sizes on screen,
+   * so the loom looks the same, and as dense as the message, at every zoom.
+   * Everything comes from a hash of (seed, octave, column, segment), so it
+   * needs no storage and no edges.
+   *
+   * The shapes are those of stretched letters: stems, pairs of stems joined
+   * by a fat tapered arch, short thick bars. They spell nothing.
+   *
+   * V is { w, h, cx, cy, rot, zoom, px, camX, camY }: the canvas size, where
+   * on it the camera point (camX, camY in image units) sits, the rotation,
+   * the zoom, and px per image unit at zoom 1. Returns paths in pixels from
+   * (cx, cy), in the rotated frame, for layer dir (0 = warp, 1 = weft).
    */
-  function buildSheet(r, amount) {
-    const layers = [new Path2D(), new Path2D()];   // [warp (vertical), weft (horizontal)]
-    if (!(amount > 0)) return layers;
+  function buildLoom(V, seed, dir) {
+    const out = { steady: new Path2D(), fading: new Path2D(), fade: 0 };
+    const amount = S.loom;
+    if (!(amount > 0)) return out;
+    const k = V.px * V.zoom;   // px per image unit
+    const u = V.px;            // px per unit at zoom 1: for sizes fixed on screen
     const st = measureStem('l', 'top');
-    const w = (st ? st.x1 - st.x0 : 0.07) * 52;   // as thick as the letters' stems
-    const EXT = 4200;                              // half-size of the sheet
-    const pitch = 104 / Math.pow(amount, 0.9);
+    const w = Math.max(1, (st ? st.x1 - st.x0 : 0.07) * 48 * u); // as thick as the letters' stems
+    const M = 520 * u;         // margin, so shapes that start off screen still show
 
-    // u runs across a thread, v along it; dir 0 = warp (vertical), 1 = weft.
-    const poly = (dir, pts, hole = false) => {
-      const m = pts.map(([u, v]) => (dir ? [MID + v, MID + u] : [MID + u, MID + v]));
+    // the visible rectangle, in px from the centre, in the rotated frame
+    const cos = Math.cos(-V.rot), sin = Math.sin(-V.rot);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of [[0, 0], [V.w, 0], [V.w, V.h], [0, V.h]]) {
+      const dx = x - V.cx, dy = y - V.cy;
+      const a = dx * cos - dy * sin, b = dx * sin + dy * cos;
+      x0 = Math.min(x0, a); x1 = Math.max(x1, a);
+      y0 = Math.min(y0, b); y1 = Math.max(y1, b);
+    }
+    // "across" a thread and "along" it
+    const [a0, a1, l0, l1] = dir ? [y0, y1, x0, x1] : [x0, x1, y0, y1];
+    const camA = dir ? V.camY : V.camX, camL = dir ? V.camX : V.camY;
+
+    const poly = (path, pts) => {
+      const m = dir ? pts.map(([a, l]) => [l, a]) : pts;
       let area = 0;
-      for (let k = 0; k < m.length; k++) {
-        const a = m[k], b = m[(k + 1) % m.length];
-        area += a[0] * b[1] - b[0] * a[1];
+      for (let n = 0; n < m.length; n++) {
+        const p = m[n], q = m[(n + 1) % m.length];
+        area += p[0] * q[1] - q[0] * p[1];
       }
-      if ((area < 0) !== hole) m.reverse();   // solids one way round, holes the other
-      const path = layers[dir];
+      if (area < 0) m.reverse(); // one winding for everything, so overlaps add up
       path.moveTo(m[0][0], m[0][1]);
-      for (let k = 1; k < m.length; k++) path.lineTo(m[k][0], m[k][1]);
+      for (let n = 1; n < m.length; n++) path.lineTo(m[n][0], m[n][1]);
       path.closePath();
     };
-    const rect = (dir, u0, v0, u1, v1) => poly(dir, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
-    const ellipse = (cu, cv, ru, rv, n = 40) => {
-      const pts = [];
-      for (let k = 0; k < n; k++) {
-        const a = (k / n) * Math.PI * 2;
-        pts.push([cu + ru * Math.cos(a), cv + rv * Math.sin(a)]);
-      }
-      return pts;
+    const lo = l0 - M, hi = l1 + M;
+    const stem = (path, a, la, lb) => {
+      la = Math.max(la, lo); lb = Math.min(lb, hi);
+      if (lb > la) poly(path, [[a - w / 2, la], [a + w / 2, la], [a + w / 2, lb], [a - w / 2, lb]]);
     };
     // two stems joined at one end by a tapered arch, like the top of an n
-    const arch = (dir, uL, uR, vEnd, sgn) => {
-      const cu = (uL + uR) / 2, half = (uR - uL) / 2;
-      const A = 200 + r() * 260, t = 50 + r() * 50, N = 22;
+    const arch = (path, aL, aR, lEnd, sgn, A, t) => {
+      if (lEnd < lo || lEnd > hi) return;
+      const c = (aL + aR) / 2, half = (aR - aL) / 2, N = 14;
       const pts = [];
-      for (let k = 0; k <= N; k++) {
-        const a = (Math.PI * k) / N;
-        pts.push([cu - (half + w / 2) * Math.cos(a), vEnd + sgn * A * Math.sin(a)]);
+      for (let n = 0; n <= N; n++) {
+        const g = (Math.PI * n) / N;
+        pts.push([c - (half + w / 2) * Math.cos(g), lEnd + sgn * A * Math.sin(g)]);
       }
-      for (let k = 0; k <= N; k++) {
-        const a = (Math.PI * k) / N;
-        pts.push([cu + (half - w / 2) * Math.cos(a), vEnd + sgn * (A - t) * Math.sin(a)]);
+      for (let n = 0; n <= N; n++) {
+        const g = (Math.PI * n) / N;
+        pts.push([c + (half - w / 2) * Math.cos(g), lEnd + sgn * (A - t) * Math.sin(g)]);
       }
-      poly(dir, pts);
+      poly(path, pts);
     };
 
-    for (const dir of [0, 1]) {
-      for (let p = -EXT; p <= EXT; p += pitch) {
-        const u = p + (r() - 0.5) * pitch * 0.8;
-        const len = 1500 + r() * r() * 6500;
-        const c = (r() - 0.5) * 2 * (EXT - 600);
-        const a = c - len / 2, b = c + len / 2;
-        const kind = r();
-        if (kind < 0.09) {
-          // a long closed loop
-          const ru = 9 + r() * 8, rv = 350 + r() * 900, t = 45 + r() * 45;
-          poly(dir, ellipse(u, c, ru + w / 2, rv));
-          poly(dir, ellipse(u, c, ru - w / 2, rv - t), true);
-          continue;
+    const lz = Math.log2(V.zoom);
+    const top = Math.floor(lz);
+    const f = lz - top;
+    out.fade = f * f * (3 - 2 * f);
+    const pitch0 = LOOM_PITCH / Math.pow(amount, 0.9);
+    for (let L = top + 1; L >= top - 9; L--) {
+      const path = L === top + 1 ? out.fading : out.steady;
+      const pitch = pitch0 * Math.pow(2, -L);   // image units between columns
+      const cell = pitch * 170;                 // one segment per cell along a column
+      const key = dir * 128 + L + 64;
+      const i0 = Math.floor((camA + (a0 - M) / k) / pitch) - 1, i1 = Math.ceil((camA + (a1 + M) / k) / pitch);
+      const j0 = Math.floor((camL + lo / k) / cell) - 1, j1 = Math.ceil((camL + hi / k) / cell);
+      for (let i = i0; i <= i1; i++) {
+        const a = ((i + 0.15 + 0.7 * hash(seed, key, i, 0x5eed, 0)) * pitch - camA) * k;
+        for (let j = j0; j <= j1; j++) {
+          const h = (n) => hash(seed, key, i, j, n);
+          const len = cell * (h(1) < 0.3 ? 0.07 + 0.16 * h(2) : 0.3 + 0.8 * h(2));
+          const start = (j + 0.6 * h(3)) * cell;
+          const la = (start - camL) * k, lb = (start + len - camL) * k;
+          if (lb < lo || la > hi) continue;
+          stem(path, a, la, lb);
+          if (h(4) > 0.5) {
+            // a second stem close by, usually joined to the first
+            const d = (16 + 14 * h(5)) * u;
+            const A = Math.min((180 + 260 * h(9)) * u, (lb - la) * 0.45), t = Math.min((45 + 50 * h(10)) * u, A * 0.5);
+            const join = h(6);
+            let qa = la, qb = lb;
+            if (join < 0.75) {
+              if (join < 0.35 || join >= 0.6) arch(path, a, a + d, la, -1, A, t);
+              if (join >= 0.35) arch(path, a, a + d, lb, 1, A, t);
+            } else {
+              qa = la + h(7) * 400 * u;
+              qb = lb - h(8) * 400 * u;
+            }
+            stem(path, a + d, qa, qb);
+          }
+          // thick portions: a short bar now and then
+          for (let n = 0; n < 2; n++) {
+            if (h(11 + n * 4) > (n ? 0.2 : 0.5)) continue;
+            const pos = la + h(12 + n * 4) * (lb - la);
+            const across = (12 + 10 * h(13 + n * 4)) * u, along = (45 + 50 * h(14 + n * 4)) * u;
+            if (pos + along < lo || pos - along > hi) continue;
+            poly(path, [[a - across / 2, pos - along / 2], [a + across / 2, pos - along / 2],
+              [a + across / 2, pos + along / 2], [a - across / 2, pos + along / 2]]);
+          }
         }
-        rect(dir, u - w / 2, a, u + w / 2, b);
-        if (kind > 0.7) {
-          // a second thread close by, sometimes joined to the first at one end
-          const d = 20 + r() * 16;
-          const end = r();
-          let a2 = a, b2 = b;
-          if (end < 0.4) arch(dir, u, u + d, a, -1);
-          else if (end < 0.65) arch(dir, u, u + d, b, 1);
-          else { a2 = a + r() * 500; b2 = b - r() * 500; }
-          rect(dir, u + d - w / 2, a2, u + d + w / 2, b2);
-        }
-        // thick portions: a short bar now and then
-        const bits = Math.floor((len / 1900) * (0.5 + r()));
-        for (let k = 0; k < bits; k++) {
-          const pos = a + r() * len;
-          const across = 12 + r() * 10, along = 45 + r() * 50, off = (r() - 0.5) * 8;
-          rect(dir, u + off - across / 2, pos - along / 2, u + off + across / 2, pos + along / 2);
-        }
-        // a lozenge floating off one end
-        if (r() < 0.1) poly(dir, ellipse(u, a - 70 - r() * 50, w * 0.85, 26 + r() * 22, 20));
       }
     }
-    return layers;
+    return out;
   }
 
   // ---------------------------------------------------------------- messages
@@ -448,7 +503,7 @@
       return { chars: placed, y: base };
     });
     // the area the phrase needs clear of loom threads (unstretched, y down)
-    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + (0.86 - xh) * em, down: total / 2 + 0.34 * em };
+    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + (0.83 - xh) * em, down: total / 2 + 0.31 * em };
     return { lines: out, extras, box, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
 
@@ -582,7 +637,8 @@
       setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, q, currentFrame()) }, dur);
     } else if (scene.msg.q !== q) {
       // Same card ⇒ same suit ⇒ q differs by whole turns: visually identical.
-      scene.msg.q = q;
+      // (Once locked the message is part of the sheet and turns with it.)
+      if (!state.locked) scene.msg.q = q;
     }
   }
 
@@ -648,64 +704,79 @@
       .filter((g) => ((Math.abs(g.U[1]) > 0.5) !== turned) === (dir === 0))
       .map((g) => ({ m, g }));
   }
-  function addZone(c, xf, z) {
+  /** Image coordinates → canvas pixels for view V. */
+  function worldTransform(c, V) {
+    const k = V.px * V.zoom;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.translate(V.cx, V.cy);
+    c.rotate(V.rot);
+    c.scale(k, k);
+    c.translate(-V.camX, -V.camY);
+  }
+  function addZone(c, V, z) {
     const b = z.g.box;
     c.save();
-    xf(c);
+    worldTransform(c, V);
     msgTransform(c, z.m);
     glyphTransform(c, z.g);
     c.rect(-b.hw, -b.up, b.hw * 2, b.up + b.down);
     c.restore();
   }
-  /** Fill one layer of the sheet, optionally only inside one zone, and outside others. */
-  function fillLayer(c, xf, path, alpha, inside, outside) {
+  /** Fill one layer of the loom, optionally only inside one zone, and outside others. */
+  function fillLayer(c, V, loom, alpha, inside, outside) {
     if (alpha <= 0) return;
     const theme = THEMES[S.theme] || THEMES.linen;
     c.save();
     if (inside) {
       c.beginPath();
-      addZone(c, xf, inside);
+      addZone(c, V, inside);
       c.clip();
     }
     for (const z of outside) {
       c.beginPath();
       c.save();
       c.setTransform(1, 0, 0, 1, 0, 0);
-      c.rect(0, 0, c.canvas.width, c.canvas.height);
+      c.rect(0, 0, V.w, V.h);
       c.restore();
-      addZone(c, xf, z);
+      addZone(c, V, z);
       c.clip('evenodd');
     }
-    xf(c);
-    c.globalAlpha = alpha;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.translate(V.cx, V.cy);
+    c.rotate(V.rot);
     c.fillStyle = theme.ink;
-    c.fill(path);
+    c.globalAlpha = alpha;
+    c.fill(loom.steady);
+    if (loom.fade > 0.01) {
+      c.globalAlpha = alpha * loom.fade;
+      c.fill(loom.fading);
+    }
     c.restore();
   }
 
   /**
-   * The sheet of loom threads. With `prev` (a scene on the same weave) and
+   * The loom threads. With `prev` (a scene on the same weave) and
    * 0 ≤ e ≤ 1 it draws a crossfade: threads outside every clear zone stay
    * steady, and only those entering or leaving a zone fade.
    */
-  function drawSheet(c, sc, alpha, xf, prev = null, e = 1) {
+  function drawSheet(c, sc, alpha, V, prev = null, e = 1) {
     for (const dir of [0, 1]) {
-      const path = sc.weave.sheet[dir];
+      const loom = buildLoom(V, sc.weave.seed, dir);
       const now = clearZones(sc, dir), was = clearZones(prev, dir);
-      fillLayer(c, xf, path, alpha, null, [...now, ...was]);
+      fillLayer(c, V, loom, alpha, null, [...now, ...was]);
       if (!prev) continue;
-      for (const z of now) fillLayer(c, xf, path, alpha * (1 - e), z, was); // being cleared
-      for (const z of was) fillLayer(c, xf, path, alpha * e, z, now);       // growing back
+      for (const z of now) fillLayer(c, V, loom, alpha * (1 - e), z, was); // being cleared
+      for (const z of was) fillLayer(c, V, loom, alpha * e, z, now);       // growing back
     }
   }
 
   /** The hidden message, if it has been woven in. */
-  function drawMsg(c, sc, alpha, xf) {
+  function drawMsg(c, sc, alpha, V) {
     const m = sc.msg;
     if (!m || alpha <= 0) return;
     const theme = THEMES[S.theme] || THEMES.linen;
     c.save();
-    xf(c);
+    worldTransform(c, V);
     c.globalAlpha = alpha;
     msgTransform(c, m);
     c.fillStyle = theme.ink;
@@ -724,19 +795,21 @@
     c.restore();
   }
 
-  function drawScene(c, sc, alpha, xf) {
-    drawSheet(c, sc, alpha, xf);
-    drawMsg(c, sc, alpha, xf);
+  function drawScene(c, sc, alpha, V) {
+    drawSheet(c, sc, alpha, V);
+    drawMsg(c, sc, alpha, V);
   }
 
-  function viewTransform(c) {
-    const { dpr } = view;
-    const k = view.fit * state.s;
-    c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    c.translate(view.cx + state.pan.x, view.cy + state.pan.y);
-    c.rotate(state.theta - (screenAngle() * Math.PI) / 180);
-    c.scale(k, k);
-    c.translate(-MID, -MID);
+  /** The view the main canvas shows right now. */
+  function mainView() {
+    const f = currentFrame();
+    return {
+      w: canvas.width, h: canvas.height,
+      cx: view.cx * view.dpr, cy: view.cy * view.dpr,
+      rot: state.theta - (screenAngle() * Math.PI) / 180,
+      zoom: state.s, px: view.fit * view.dpr,
+      camX: f.x, camY: f.y,
+    };
   }
 
   function render(now) {
@@ -750,16 +823,17 @@
       t = clamp((now - fade.start) / fade.dur, 0, 1);
       if (t >= 1) fade = null;
     }
-    if (!fade) { drawScene(ctx, scene, 1, viewTransform); return; }
+    const V = mainView();
+    if (!fade) { drawScene(ctx, scene, 1, V); return; }
     const e = easeOut(t);
     if (fade.prev.weave === scene.weave) {
       // same loom, only the message changes: keep the threads steady
-      drawSheet(ctx, scene, 1, viewTransform, fade.prev, e);
-      drawMsg(ctx, fade.prev, 1 - e, viewTransform);
-      drawMsg(ctx, scene, e, viewTransform);
+      drawSheet(ctx, scene, 1, V, fade.prev, e);
+      drawMsg(ctx, fade.prev, 1 - e, V);
+      drawMsg(ctx, scene, e, V);
     } else {
-      drawScene(ctx, fade.prev, 1 - e, viewTransform);
-      drawScene(ctx, scene, e, viewTransform);
+      drawScene(ctx, fade.prev, 1 - e, V);
+      drawScene(ctx, scene, e, V);
     }
   }
 
@@ -803,12 +877,9 @@
 
   function settle() {
     const theta = quadrant() * Q;
-    // Free zoom while it is only a loom. Once a card has been input the sheet
-    // relaxes back to natural size on release, so the message (laid out to
-    // fit the screen) and the loom threads around it are at the same scale.
-    const s = state.revealed ? 1 : clamp(state.s, 0.6, 2.2);
-    const limX = view.w * 1.3, limY = view.h * 1.1;
-    const px = clamp(state.pan.x, -limX, limX), py = clamp(state.pan.y, -limY, limY);
+    const s = clamp(state.s, ZOOM_MIN, ZOOM_MAX);
+    const lim = ROAM * view.fit * s;
+    const px = clamp(state.pan.x, -lim, lim), py = clamp(state.pan.y, -lim, lim);
     const moved = Math.abs(theta - state.theta) > 1e-4 || Math.abs(s - state.s) > 1e-4 ||
       px !== state.pan.x || py !== state.pan.y;
     if (moved) animateTo({ theta, s, px, py }, 260, () => commit());
@@ -829,8 +900,9 @@
   }
 
   function stepValue(d) {
+    if (state.locked) return; // locked in: gestures only move the picture
     state.value = mod(state.value + d, 13);
-    state.revealed = true;
+    if (S.revealOn === 'input') state.revealed = true;
     haptic();
     updateIndicator();
     if (S.liveUpdate) liveRebuild();
@@ -841,11 +913,41 @@
     const q = quadrant();
     if (q !== lastQuadrant) {
       lastQuadrant = q;
-      state.revealed = true;
+      if (state.locked) return;
+      if (S.revealOn === 'input') state.revealed = true;
       haptic();
       updateIndicator();
       if (S.liveUpdate) liveRebuild();
     }
+  }
+
+  /**
+   * Double-tap: lock the revelation in. The card can no longer change, the
+   * message stays woven into the loom where it is, and pinching and turning
+   * just move the picture. Reweave clears it.
+   */
+  function lockIn() {
+    if (state.locked || !scene) return;
+    state.locked = currentCard();
+    state.revealed = true;
+    commit();
+    try { if (S.haptics && navigator.vibrate) navigator.vibrate([12, 60, 12]); else { lastHapticAt = 0; haptic(); } } catch (_) { /* ignore */ }
+    updateIndicator();
+  }
+  /** Bring the woven message back to the middle of the screen, upright. */
+  function recentre() {
+    const to = { s: 1, px: 0, py: 0, theta: quadrant() * Q };
+    if (scene && scene.msg) {
+      const m = scene.msg, f = m.frame;
+      to.theta = m.q * Q + Math.round((state.theta - m.q * Q) / (4 * Q)) * 4 * Q;
+      const a = to.theta - (screenAngle() * Math.PI) / 180;
+      to.s = 1 / f.k;
+      const kv = view.fit * to.s;
+      const ux = (f.x - MID) * kv, uy = (f.y - MID) * kv;
+      to.px = -(ux * Math.cos(a) - uy * Math.sin(a));
+      to.py = -(ux * Math.sin(a) + uy * Math.cos(a));
+    }
+    animateTo(to, 320, () => commit());
   }
 
   function liveRebuild() {
@@ -861,6 +963,7 @@
     const v = VALUES[c.value];
     const suitIdx = suitKeys().indexOf(c.suitKey);
     ind.dataset.card = cardKey(c);
+    ind.classList.toggle('locked', !!state.locked);
     switch (S.indicator) {
       case 'card':
         ind.textContent = `${v.short}${SUITS[c.suitKey].sym}`;
@@ -944,7 +1047,7 @@
 
     // visual transform, anchored at the finger centroid
     state.theta = G.th0 + effAng;
-    state.s = clamp(G.s0 * Math.exp(effLog), 0.3, 6);
+    state.s = clamp(G.s0 * Math.exp(effLog), ZOOM_MIN / 1.25, ZOOM_MAX * 1.25);
     const ratio = state.s / G.s0;
     const rot = state.theta - G.th0;
     const P0x = view.cx + G.pan0.x, P0y = view.cy + G.pan0.y;
@@ -982,18 +1085,8 @@
       const now = performance.now();
       if (now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
         lastTap.t = 0;
-        const theta = quadrant() * Q;
-        const to = { s: 1, px: 0, py: 0, theta };
-        if (scene && scene.msg) {
-          const f = scene.msg.frame;
-          const a = theta - (screenAngle() * Math.PI) / 180;
-          to.s = 1 / f.k;
-          const kv = view.fit * to.s;
-          const ux = (f.x - MID) * kv, uy = (f.y - MID) * kv;
-          to.px = -(ux * Math.cos(a) - uy * Math.sin(a));
-          to.py = -(ux * Math.sin(a) + uy * Math.cos(a));
-        }
-        animateTo(to, 300, () => commit());
+        // first double-tap locks the revelation in; after that it recentres
+        if (!state.locked) { lockIn(); settle(); } else recentre();
         return;
       }
       lastTap = { t: now, x: e.clientX, y: e.clientY };
@@ -1031,7 +1124,7 @@
     } else {
       const dl = -delta * 0.0022;
       wheelG.lg += dl;
-      state.s = clamp(state.s * Math.exp(dl), 0.3, 6);
+      state.s = clamp(state.s * Math.exp(dl), ZOOM_MIN / 1.25, ZOOM_MAX * 1.25);
       const st = Math.log(S.pinchStep);
       while (wheelG.lg - wheelG.tickBase >= st) { wheelG.tickBase += st; stepValue(+1); }
       while (wheelG.lg - wheelG.tickBase <= -st) { wheelG.tickBase -= st; stepValue(-1); }
@@ -1064,7 +1157,14 @@
   // ---------------------------------------------------------------- reweave
   function reweave() {
     state.seed = newSeed();
-    state.revealed = !S.hideUntilInput; // back to a bare loom until the next input
+    if (state.locked) {
+      // unlock, keeping the indicator on the card that was locked
+      const card = state.locked;
+      state.locked = null;
+      state.value = card.value;
+      state.suitOffset = mod(S.suitOrder.indexOf(card.suitKey) - quadrant(), 4);
+    }
+    state.revealed = S.revealOn === 'start'; // back to a bare loom
     rebuild({ fadeMs: 650 });
     updateIndicator();
   }
@@ -1127,7 +1227,7 @@
       const c = cardWith(before.suitOrder);
       state.suitOffset = mod(S.suitOrder.indexOf(c) - quadrant(), 4);
     }
-    if (!S.hideUntilInput) state.revealed = true;
+    if (S.revealOn === 'start') state.revealed = true;
     clearTimeout(formTimer);
     formTimer = setTimeout(() => { rebuild({ newWeave: true }); updateIndicator(); drawPreviews(); }, 60);
   });
@@ -1186,12 +1286,11 @@
     c.fillStyle = theme.bg;
     c.fillRect(0, 0, size, size);
     const k = size / span;
-    drawScene(c, sc, 1, (cc) => {
-      cc.setTransform(1, 0, 0, 1, 0, 0);
-      cc.translate(size / 2, size / 2);
-      cc.rotate(EDGES[edge].toBottom + m.q * Q);
-      cc.scale(k / m.frame.k, k / m.frame.k);
-      cc.translate(-m.frame.x, -m.frame.y);
+    drawScene(c, sc, 1, {
+      w: size, h: size, cx: size / 2, cy: size / 2,
+      rot: EDGES[edge].toBottom + m.q * Q,
+      zoom: 1 / m.frame.k, px: k,
+      camX: m.frame.x, camY: m.frame.y,
     });
     const out = cv.getContext('2d');
     out.fillStyle = theme.bg;
@@ -1224,7 +1323,7 @@
       state.value = Math.floor(Math.random() * 13);
       state.suitOffset = Math.floor(Math.random() * 4);
     }
-    state.revealed = !S.hideUntilInput;
+    state.revealed = S.revealOn === 'start';
     applyTheme();
     resize();
     rebuild();
@@ -1242,6 +1341,7 @@
   window.loom = {
     get state() { return { ...state, card: cardKey(currentCard()), phrase: cardPhrase(currentCard()) }; },
     get scene() { return scene; },
+    lockIn, recentre,
     settings: () => ({ ...S }),
     setCard(value, suitKey) {
       state.value = mod(value, 13);
