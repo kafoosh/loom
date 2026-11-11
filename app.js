@@ -78,6 +78,7 @@
     stretch: 24,
     density: 1,
     loomOn: true,
+    ascender: 0.35,     // how much of their stretch the ascenders/descenders keep
     revealOn: 'lock',   // 'lock' (double-tap), 'input' (first pinch/twist) or 'start'
     layout: 'overlap',
     weight: 300,
@@ -206,14 +207,18 @@
   /**
    * How a phrase read from `edge` fills the screen (layout units, zoom 1):
    * it runs the full length of one side and is stretched across the other.
-   * The stretched bodies of the letters can only take up a little over half
-   * of that, because the ascenders and descenders have to fit on screen too,
-   * or an h reads as an n.
+   * The ascenders and descenders have to fit on screen too, or an h reads as
+   * an n. At full stretch they would take nearly half the screen, so they are
+   * stretched less than the bodies of the letters (see `S.ascender`), which
+   * leaves the bodies most of the screen.
    */
   function pageSlot(edge) {
     const W = view.visW * 0.97, H = view.visH * 0.97;
     const sideways = Math.abs(EDGES[edge].U[0]) > 0.5; // stretched across the screen
-    return sideways ? { width: H * 0.985, maxBand: W * 0.58 } : { width: W * 0.985, maxBand: H * 0.58 };
+    // What is left over after the (squashed) ascenders and descenders.
+    const xh = measurePhrase('x').xh;
+    const body = 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
+    return sideways ? { width: H * 0.985, maxBand: W * body } : { width: W * 0.985, maxBand: H * body };
   }
 
   const GAP = '    '; // between repeats of a phrase
@@ -268,7 +273,7 @@
       const rnd = mulberry32(Math.floor(hash(seed, L + 64, ci, cj, i) * 4294967296));
       const em = slot.maxBand / (St * xh);
       const g = layoutSolid(gibberish(rnd, slot.width / (em * 1.3)), slot.width, slot.maxBand, rnd, 1, 0.7);
-      return g && { lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, St: g.St, ox: MID, oy: MID, U: e.U, R: e.R };
+      return g && { lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, xhU: g.xhU, ra: g.ra, St: g.St, ox: MID, oy: MID, U: e.U, R: e.R };
     }).filter(Boolean);
     page = { glyphs };
     pageCache.set(key, page);
@@ -363,6 +368,10 @@
     const pitch = xhU * (1 + lineGap);
     const total = n * xhU + (n - 1) * xhU * lineGap;
 
+    // Ascenders and descenders are stretched only `ra` as much as the bodies.
+    // Heights (in ems above the baseline) go through this before the stretch.
+    const ra = clamp(S.ascender, 0.1, 1);
+    const squash = (ey) => (ey > xh ? xh + (ey - xh) * ra : ey < 0 ? ey * ra : ey);
     const extras = new Path2D();
     // Every shape is wound the same way, so overlapping pieces add up
     // instead of cancelling under the non-zero fill rule.
@@ -402,7 +411,7 @@
       const placed = [];
       chars.forEach((ch, ci) => {
         const a = adv[i][ci] * em;
-        const X = (ex) => x + ex * em, Y = (ey) => base - ey * em;
+        const X = (ex) => x + ex * em, Y = (ey) => base - squash(ey) * em;
         if (ch === ' ') {
           // above 100%, some word gaps get a stray thread right through the block
           if (n === 1 && dens > 1 && rnd() < (dens - 1) * 0.8) {
@@ -449,8 +458,8 @@
       return { chars: placed, y: base };
     });
     // the area the phrase needs clear of loom threads (unstretched, y down)
-    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + (0.83 - xh) * em, down: total / 2 + 0.31 * em };
-    return { lines: out, extras, box, em, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
+    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + (0.83 - xh) * em * ra, down: total / 2 + 0.31 * em * ra };
+    return { lines: out, extras, box, em, xhU, ra, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
 
   /** Width of a phrase in ems (its longest line), and the font's x-height. */
@@ -531,7 +540,7 @@
       const sizeJitter = regions[i].exact ? 1 : 0.94 + 0.06 * (i ? 1 - j.band : j.band);
       const g = layoutSolid(m.text, regions[i].bw, regions[i].mb, rnd, sizeJitter, regions[i].track);
       if (!g) return null;
-      glyphs.push({ lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
+      glyphs.push({ lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, xhU: g.xhU, ra: g.ra, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
       return { textW: g.textW, bandLen: g.bandLen, lines: g.text, St: g.St, edge: m.edge };
     });
     return { glyphs, q, frame: frame || { x: MID, y: MID, k: 1 }, key: cardKey(card), info, card };
@@ -669,9 +678,33 @@
     const onScreen = !vis || (vis[2] < g.box.up * g.St && vis[3] > -g.box.down * g.St);
     for (const ln of g.lines) {
       if (!onScreen) break;
-      for (const o of ln.chars) {
-        if (vis && (o.x > vis[1] || o.x + g.em * 1.2 < vis[0])) continue;
-        c.fillText(o.ch, o.x, ln.y);
+      const chars = vis ? ln.chars.filter((o) => !(o.x > vis[1] || o.x + g.em * 1.2 < vis[0])) : ln.chars;
+      if (!chars.length) continue;
+      if (!(g.ra < 1)) {
+        for (const o of chars) c.fillText(o.ch, o.x, ln.y);
+        continue;
+      }
+      // The letters are drawn in three slices: the bodies (baseline to
+      // x-line) at full stretch, and everything above and below squashed
+      // towards them. Stems are vertical, so the slices join up.
+      const xLine = ln.y - g.xhU, far = g.em * 40, lap = g.em * 0.004;
+      const slices = [
+        [xLine - lap, ln.y + lap, 0, 1],      // bodies (a hair over, to hide the seams)
+        [xLine - far, xLine, xLine, g.ra],    // ascenders, squashed onto the x-line
+        [ln.y, ln.y + far, ln.y, g.ra],       // descenders, squashed onto the baseline
+      ];
+      for (const [y0, y1, pivot, r] of slices) {
+        c.save();
+        c.beginPath();
+        c.rect(vis ? vis[0] - g.em * 2 : -1e6, y0, vis ? vis[1] - vis[0] + g.em * 4 : 2e6, y1 - y0);
+        c.clip();
+        if (r !== 1) {
+          c.translate(0, pivot);
+          c.scale(1, r);
+          c.translate(0, -pivot);
+        }
+        for (const o of chars) c.fillText(o.ch, o.x, ln.y);
+        c.restore();
       }
     }
     c.fill(g.extras); // run-on stems and the redrawn k's
@@ -1193,6 +1226,7 @@
   function updateOutputs() {
     form.elements.stretchOut.value = `${(+S.stretch).toFixed(0)}× · view at ~${(Math.asin(1 / S.stretch) * 180 / Math.PI).toFixed(1)}°`;
     form.elements.densityOut.value = `${Math.round(S.density * 100)}%`;
+    form.elements.ascenderOut.value = `${Math.round(S.ascender * 100)}%`;
     form.elements.weightOut.value = `${Math.round(S.weight)}`;
     form.elements.pinchStepOut.value = `${Math.round((S.pinchStep - 1) * 100)}%`;
   }

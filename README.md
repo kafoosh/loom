@@ -25,7 +25,7 @@ Other controls: drag with one finger to pan. Once locked, double-tap again bring
 - both phrases, and which edge each is read from (`{value}`, `{suit}`, and `|` for a line break)
 - suit order (CHaSeD or SHoCkeD), pinch sensitivity, gesture lock, haptics
 - indicator style: `7♥`, a code (`no. 07·2`), dots, or off
-- stretch, letter case, letter thickness, how many loose threads, layout, and theme
+- stretch, how tall the tall parts of letters are, letter case, letter thickness, how many loose threads, layout, and theme
 - whether the rest of the loom is filled in (on by default)
 - when the message is woven in: on lock-in (the default), as soon as a card is input, or from the start
 - **live previews** that simulate the tilted view, so you can check the text reads before you perform
@@ -63,7 +63,7 @@ At a grazing angle (about 2–5° above the screen), foreshortening squashes the
 
 The font is Roboto (variable weight), bundled in `fonts/` under the SIL Open Font License, so the letters look the same on every device.
 
-The message fills the whole screen. Phrase 1 runs the full width and is stretched down the screen; phrase 2 runs the full height and is stretched across it. The stretched bodies of the letters take up a little over half of each direction, because the ascenders and descenders have to fit on screen too (otherwise an h reads as an n). A phrase that is too short to reach the far end is repeated along its line: on a phone the card phrase appears two or three times down the screen.
+The message fills the whole screen. Phrase 1 runs the full width and is stretched down the screen; phrase 2 runs the full height and is stretched across it. The ascenders and descenders have to fit on screen too (otherwise an h reads as an n), and at full stretch they would take nearly half of it. So they are stretched only about a third as much as the bodies of the letters, which lets the bodies cover about three-quarters of the screen in each direction. Tilted, the words read normally but with shorter tall parts. A phrase that is too short to reach the far end is repeated along its line: on a phone the card phrase appears two or three times down the screen.
 
 The loom is made of the same thing as the message. It is page after page of stretched lettering, one phrase across each page and one down, except that the letters are nonsense. So the screen looks the same before and after you lock in; only the letters change. Pages are generated from a random seed when they come on screen, they tile in every direction, and they exist at every power-of-two scale, so zooming in keeps finding new pages the same size on screen. When the message is woven in, the nonsense lettering under it is cleared, so nothing strikes through the words.
 
