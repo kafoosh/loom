@@ -2,7 +2,7 @@
 
 A tilt-to-read card trick that runs as a static page (GitHub Pages).
 
-The page opens as an endless loom of threads with nothing hidden in it. You secretly enter a card while "adjusting" the image and double-tap to lock it in, and a patch of the loom quietly reweaves itself in the middle of the screen. Tilt the phone and look along it from the charger end, and that patch squashes together into **the card you chose was**. Look from the side and it reads **the seven of hearts**, or whichever card the spectator chose.
+The page opens as an endless loom of threads with nothing hidden in it. You secretly enter a card while "adjusting" the image and double-tap to lock it in, and the threads on screen quietly reweave themselves. Tilt the phone and look along it from the charger end, and they squash together into **the card you chose was**. Look from the side and they read **the seven of hearts**, or whichever card the spectator chose.
 
 ## The routine
 
@@ -25,7 +25,8 @@ Other controls: drag with one finger to pan. Once locked, double-tap again bring
 - both phrases, and which edge each is read from (`{value}`, `{suit}`, and `|` for a line break)
 - suit order (CHaSeD or SHoCkeD), pinch sensitivity, gesture lock, haptics
 - indicator style: `7♥`, a code (`no. 07·2`), dots, or off
-- stretch, letter case, letter thickness, how many loose threads and loom threads, layout, and theme
+- stretch, letter case, letter thickness, how many loose threads, layout, and theme
+- whether the rest of the loom is filled in (on by default)
 - when the message is woven in: on lock-in (the default), as soon as a card is input, or from the start
 - **live previews** that simulate the tilted view, so you can check the text reads before you perform
 
@@ -54,7 +55,7 @@ It copies how the classic tilt-to-read images are built:
 1. Each phrase is set in small, light, lowercase type. Every letter is only a few percent of the block's width.
 2. The phrase is stretched about 24× in one direction only: phrase 1 vertically, phrase 2 horizontally (it is the same thing rotated 90°).
 3. The stretched bodies of the letters (the x-height) form the dense block. Ascenders and descenders hang out of it as loose threads.
-4. The two phrases fill the same rectangle: each is letter-spaced to reach the far side, so the stems of one cross the stems of the other everywhere, like warp and weft.
+4. The two phrases are laid over each other and each runs the full length of the screen, so the stems of one cross the stems of the other like warp and weft.
 
 Nothing else is distorted. Where a curved stroke turns horizontal (the tops and bottoms of n, o, e, a, s) the stretch makes it 24× thicker, while the upright stems stay thin. That is what produces the fat, tapered loops at the top and bottom of each letter. Lowercase matters: capitals are mostly straight stems and bars, which stretch into obvious rectangles.
 
@@ -62,9 +63,9 @@ At a grazing angle (about 2–5° above the screen), foreshortening squashes the
 
 The font is Roboto (variable weight), bundled in `fonts/` under the SIL Open Font License, so the letters look the same on every device.
 
-The loom around the words is generated from a random seed, on the fly, for whatever part of it is on screen. It is drawn with the same shapes a stretched letter has: long stems, pairs of stems joined by a fat tapered arch, and short thick bars. It spells nothing, and it is about as dense as the message, so the message does not stand out as a darker patch.
+The message fills the whole screen. Phrase 1 runs the full width and is stretched down the screen; phrase 2 runs the full height and is stretched across it. The stretched bodies of the letters take up a little over half of each direction, because the ascenders and descenders have to fit on screen too (otherwise an h reads as an n). A phrase that is too short to reach the far end is repeated along its line: on a phone the card phrase appears two or three times down the screen.
 
-The loom is self-similar. Threads live on octaves, each with twice as many threads as the last. At any zoom the octaves up to that zoom are drawn and the next one is fading in, while thread thickness and the size of arches and bars stay fixed on screen. Zooming in therefore keeps revealing new threads of the same size between the old ones, and there are no edges to reach. A loom thread is cleared only where it would read as a letter stem when tilted, which is inside the phrase stretched along it. Everywhere else the threads run right up to the block.
+The loom is made of the same thing as the message. It is page after page of stretched lettering, one phrase across each page and one down, except that the letters are nonsense. So the screen looks the same before and after you lock in; only the letters change. Pages are generated from a random seed when they come on screen, they tile in every direction, and they exist at every power-of-two scale, so zooming in keeps finding new pages the same size on screen. When the message is woven in, the nonsense lettering under it is cleared, so nothing strikes through the words.
 
 Lines that come from the words themselves:
 
