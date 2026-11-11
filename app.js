@@ -23,8 +23,8 @@
   const IMG = 1000;
   const MID = IMG / 2;
   const CLOTH = 820;
-  const FONT = '"Helvetica Neue", Helvetica, Arial, "Liberation Sans", "DejaVu Sans", sans-serif';
-  const FONT_WEIGHT = 800;
+  // Bundled thin variable font (fonts/), so strokes are thread-thin on every device.
+  const FONT = '"Loom Thread", "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif';
   const MASK_RES = 2; // mask pixels per (unstretched) image unit
   const MAX_STRETCH = 24;
 
@@ -75,6 +75,7 @@
     density: 1,
     layout: 'overlap',
     letters: 'solid',
+    weight: 250,
     theme: 'linen',
     holdOrientation: true,
   };
@@ -248,7 +249,7 @@
    * box's length. Each phrase gets its own stretch (never less than minS).
    */
   function fitText(text, budgetW, budgetL, minS, maxS) {
-    mctx.font = `${FONT_WEIGHT} 100px ${FONT}`;
+    mctx.font = `${S.weight} 100px ${FONT}`;
     let best = null;
     for (const lines of lineCandidates(text)) {
       let maxW = 0, asc = 0, desc = 0;
@@ -292,7 +293,7 @@
     if (S.letters !== 'threads') {
       glyphs.push({
         lines: f.lines,
-        font: `${FONT_WEIGHT} ${100 * k}px ${FONT}`,
+        font: `${S.weight} ${100 * k}px ${FONT}`,
         asc: f.asc * k, lineH: f.lineH * k, gap: f.gap * k, total: bandH,
         ox: c[0], oy: c[1], U: edge.U, R: edge.R, St,
       });
@@ -307,7 +308,7 @@
     mctx.fillStyle = '#000';
     mctx.textAlign = 'center';
     mctx.textBaseline = 'alphabetic';
-    mctx.font = `${FONT_WEIGHT} ${100 * k * MASK_RES}px ${FONT}`;
+    mctx.font = `${S.weight} ${100 * k * MASK_RES}px ${FONT}`;
     f.lines.forEach((ln, i) => {
       const y = pad + (i * (f.lineH + f.gap) + f.asc) * k * MASK_RES;
       mctx.fillText(ln, mw / 2, y);
@@ -884,6 +885,7 @@
     form.elements.stretchOut.value = `at least ${(+S.stretch).toFixed(1)}×`;
     form.elements.pitchOut.value = (+S.pitch).toFixed(1);
     form.elements.densityOut.value = `${Math.round(S.density * 100)}%`;
+    form.elements.weightOut.value = `${Math.round(S.weight)}`;
     form.elements.pinchStepOut.value = `${Math.round((S.pinchStep - 1) * 100)}%`;
   }
   function readForm() {
@@ -1032,6 +1034,13 @@
     reweave,
   };
 
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(init);
-  else init();
+  // The words are canvas text, so the font must be loaded before the first draw.
+  if (document.fonts && document.fonts.load) {
+    const timeout = new Promise((res) => setTimeout(res, 2500));
+    Promise.race([document.fonts.load(`${S.weight} 100px "Loom Thread"`, 'YOU'), timeout])
+      .catch(() => {})
+      .then(init);
+    // If the font arrives late (slow connection), reweave the words with it.
+    document.fonts.ready.then(() => { if (scene) rebuild({ newWeave: false }); });
+  } else init();
 })();
