@@ -67,7 +67,7 @@
     edgeA: 'bottom',
     edgeB: 'left',
     valueStyle: 'words',
-    letterCase: 'lower',
+    letterCase: 'upper',
     suitOrder: 'CHSD',
     pinchStep: 1.22,
     gestureLock: true,
@@ -121,6 +121,8 @@
         if (!(saved.rev >= 2)) delete saved.letterCase;
         // …and the stronger default stretch
         if (!(saved.rev >= 3)) delete saved.stretch;
+        // …and equal-height (capital) letters
+        if (!(saved.rev >= 4)) delete saved.letterCase;
         delete saved.rev;
         return { ...DEFAULTS, ...saved };
       }
@@ -128,7 +130,7 @@
     return { ...DEFAULTS };
   }
   function saveSettings() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 3 })); } catch (_) { /* ignore */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 4 })); } catch (_) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- state
@@ -173,6 +175,13 @@
       .replace(/\{suit\}/gi, SUITS[c.suitKey].name);
   }
   /** Lowercase letters stretch into loops and loose ends; capitals into obvious bars. */
+  /**
+   * Capitals are all one height, so the whole phrase is one even band. In
+   * lowercase the short letters make the band and the tall ones stick out.
+   */
+  const allCaps = () => S.letterCase === 'upper';
+  /** The letter whose height is the height of the band. */
+  const bodyProbe = () => (allCaps() ? 'H' : 'x');
   function applyCase(text, first) {
     if (S.letterCase === 'upper') return text.toUpperCase();
     const low = text.toLowerCase();
@@ -217,7 +226,8 @@
     const sideways = Math.abs(EDGES[edge].U[0]) > 0.5; // stretched across the screen
     // What is left over after the (squashed) ascenders and descenders.
     const xh = measurePhrase('x').xh;
-    const body = 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
+    // (capitals have nothing above them and only the odd tail below)
+    const body = allCaps() ? 0.94 : 0.985 / (1 + ((0.76 - xh + 0.24) / xh) * clamp(S.ascender, 0.1, 1));
     return sideways ? { width: H * 0.985, maxBand: W * body } : { width: W * 0.985, maxBand: H * body };
   }
 
@@ -230,9 +240,16 @@
     if (/[|\n]/.test(text) || !text.trim()) return text;
     const St = Math.min(MAX_STRETCH, S.stretch);
     const m = measurePhrase(text);
-    const em = Math.min(slot.width / m.nat, slot.maxBand / (St * m.xh));
-    const one = (m.nat + 1) * em;                        // one copy plus its gap
-    const n = Math.max(1, Math.ceil(slot.width / (1.7 * one) - 0.2));
+    // Pick the number of copies that needs the least letter-spacing to reach
+    // the end. Slightly too many is better than too few: the type just gets
+    // a little smaller, whereas too few leaves the letters far apart.
+    const emMax = slot.maxBand / (St * m.xh);
+    let n = 1, best = Infinity;
+    for (let k = 1; k <= 8; k++) {
+      const spread = slot.width / ((k * m.nat + (k - 1)) * emMax); // >1: letter-spaced, <1: shrunk
+      const cost = spread >= 1 ? Math.log(spread) : -2.5 * Math.log(spread);
+      if (cost < best) { best = cost; n = k; }
+    }
     return n > 1 ? Array(n).fill(text.trim()).join(GAP) : text;
   }
 
@@ -246,9 +263,9 @@
       let word = '';
       for (let n = 0; n < len; n++) word += LETTERS[Math.floor(rnd() * LETTERS.length)];
       out += (out ? ' ' : '') + word;
-      if (measurePhrase(out).nat >= ems) break;
+      if (measurePhrase(applyCase(out, false)).nat >= ems) break;
     }
-    return out;
+    return applyCase(out, false);
   }
 
   /**
@@ -350,7 +367,7 @@
     const n = lines.length;
     const setFont = () => { mctx.font = `${S.weight} 100px ${FONT}`; };
     setFont();
-    const xh = (mctx.measureText('x').actualBoundingBoxAscent || 52) / 100; // of the em
+    const xh = (mctx.measureText(bodyProbe()).actualBoundingBoxAscent || 52) / 100; // band height, of the em
     const kRight = {};
     for (const ch of 'kK') kRight[ch] = (mctx.measureText(ch).actualBoundingBoxRight || 50) / 100;
     const lineGap = 0.8;                       // gap between lines, in x-heights
@@ -458,7 +475,7 @@
       return { chars: placed, y: base };
     });
     // the area the phrase needs clear of loom threads (unstretched, y down)
-    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + (0.83 - xh) * em * ra, down: total / 2 + 0.31 * em * ra };
+    const box = { hw: textW / 2 + em * 0.25, up: total / 2 + Math.max(0.04, 0.83 - xh) * em * ra, down: total / 2 + 0.31 * em * ra };
     return { lines: out, extras, box, em, xhU, ra, text: lines, font: `${S.weight} ${em}px ${FONT}`, St, textW, bandLen: total * St };
   }
 
@@ -467,7 +484,7 @@
     mctx.font = `${S.weight} 100px ${FONT}`;
     const lines = text.replace(/[ \t]+/g, ' ').trim().split(/\s*[|\n]\s*/).filter(Boolean);
     const nat = Math.max(0.01, ...lines.map((ln) => mctx.measureText(ln).width / 100));
-    return { nat, xh: (mctx.measureText('x').actualBoundingBoxAscent || 52) / 100 };
+    return { nat, xh: (mctx.measureText(bodyProbe()).actualBoundingBoxAscent || 52) / 100 };
   }
 
   /**
