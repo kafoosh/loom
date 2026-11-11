@@ -36,7 +36,7 @@ On a computer: scroll changes the value, shift+scroll changes the suit, and the 
 
 - Add the page to your home screen so it opens full screen, without browser bars.
 - Turn off auto-rotate, or leave "Keep weave fixed if the screen auto-rotates" switched on.
-- **Stretch** (default 24×) sets how squashed the words are. Raise it to hide them better. Lower it for bigger letters and a less extreme tilt.
+- **Stretch** (default 24×) sets how far the words are pulled out. Letter width stays the same, so more stretch makes each phrase longer: phrase 1 taller, phrase 2 wider. When a phrase reaches the edge of the screen, the letters get narrower instead. The screen is much narrower than it is tall, so phrase 2 hits that limit first.
 - Longer phrases make a denser, more convincing mesh. Card values are spelled out ("seven") by default for that reason.
 - The **overlap** layout (the default) is the classic construction. The **split** layout gives each phrase its own half instead.
 
@@ -52,7 +52,7 @@ It copies how the classic tilt-to-read images are built:
 
 1. Each phrase is set in small, light, lowercase type. Every letter is only a few percent of the block's width.
 2. The phrase is stretched about 24× in one direction only: phrase 1 vertically, phrase 2 horizontally (it is the same thing rotated 90°).
-3. The type size is chosen so the stretched bodies of the letters (the x-height) form the dense block. Ascenders and descenders hang out of it as loose threads.
+3. The stretched bodies of the letters (the x-height) form the dense block. Ascenders and descenders hang out of it as loose threads.
 4. The two phrases are laid over each other, so the stems of one cross the stems of the other like warp and weft.
 
 Nothing else is distorted. Where a curved stroke turns horizontal (the tops and bottoms of n, o, e, a, s) the stretch makes it 24× thicker, while the upright stems stay thin. That is what produces the fat, tapered loops at the top and bottom of each letter. Lowercase matters: capitals are mostly straight stems and bars, which stretch into obvious rectangles.
