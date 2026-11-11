@@ -62,7 +62,7 @@
     edgeA: 'bottom',
     edgeB: 'left',
     valueStyle: 'words',
-    letterCase: 'sentence',
+    letterCase: 'lower',
     suitOrder: 'CHSD',
     pinchStep: 1.22,
     gestureLock: true,
@@ -105,13 +105,16 @@
         const saved = JSON.parse(raw);
         // carry the old default phrase forward to the current one
         if (/^you will pick$/i.test((saved.phraseA || '').trim())) delete saved.phraseA;
+        // settings saved before all-lowercase became the default pick it up once
+        if (!(saved.rev >= 2)) delete saved.letterCase;
+        delete saved.rev;
         return { ...DEFAULTS, ...saved };
       }
     } catch (_) { /* storage unavailable */ }
     return { ...DEFAULTS };
   }
   function saveSettings() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (_) { /* ignore */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 2 })); } catch (_) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- state
