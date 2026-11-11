@@ -3,7 +3,7 @@
  *
  * The picture is two phrases drawn on a 1000 × 1000 unit canvas, built the
  * way classic tilt-to-read images are:
- *   – Each phrase is small, light, mostly lowercase type, stretched ~17× along
+ *   – Each phrase is small, light, mostly lowercase type, stretched ~24× along
  *     one axis only (phrase 1 vertically, phrase 2 horizontally) and laid over
  *     the other. Viewed at a grazing angle along that axis, foreshortening
  *     squashes it back into letters.
@@ -70,7 +70,7 @@
     haptics: true,
     indicator: 'card',
     startCard: 'random',
-    stretch: 17,
+    stretch: 24,
     density: 1,
     layout: 'overlap',
     weight: 300,
@@ -107,6 +107,8 @@
         if (/^you will pick$/i.test((saved.phraseA || '').trim())) delete saved.phraseA;
         // settings saved before all-lowercase became the default pick it up once
         if (!(saved.rev >= 2)) delete saved.letterCase;
+        // …and the stronger default stretch
+        if (!(saved.rev >= 3)) delete saved.stretch;
         delete saved.rev;
         return { ...DEFAULTS, ...saved };
       }
@@ -114,7 +116,7 @@
     return { ...DEFAULTS };
   }
   function saveSettings() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 2 })); } catch (_) { /* ignore */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...S, rev: 3 })); } catch (_) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- state
@@ -377,7 +379,7 @@
     } else if (S.layout === 'overlap') {
       // Classic look: both phrases fill the same square and cross in it, so
       // the stems of one run the full length of the other.
-      const side = Math.min(ext(A.U), ext(A.R)) * 0.72;
+      const side = Math.min(ext(A.U), ext(A.R)) * 0.84;
       regions = msgs.map((m, i) => {
         const e = EDGES[m.edge];
         return { c: at([0, 0], j.u * 22 * (i ? -1 : 1), j.r * 16, e), bw: side, bl: side, bf: 0.9 };

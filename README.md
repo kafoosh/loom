@@ -36,7 +36,7 @@ On a computer: scroll changes the value, shift+scroll changes the suit, and the 
 
 - Add the page to your home screen so it opens full screen, without browser bars.
 - Turn off auto-rotate, or leave "Keep weave fixed if the screen auto-rotates" switched on.
-- **Stretch** (default 17×) sets how squashed the words are. Raise it to hide them better. Lower it for bigger letters and a less extreme tilt.
+- **Stretch** (default 24×) sets how squashed the words are. Raise it to hide them better. Lower it for bigger letters and a less extreme tilt.
 - Longer phrases make a denser, more convincing mesh. Card values are spelled out ("seven") by default for that reason.
 - The **overlap** layout (the default) is the classic construction. The **split** layout gives each phrase its own half instead.
 
@@ -51,13 +51,13 @@ To try it locally, run `python3 -m http.server` in this folder and open <http://
 It copies how the classic tilt-to-read images are built:
 
 1. Each phrase is set in small, light, lowercase type. Every letter is only a few percent of the block's width.
-2. The phrase is stretched about 17× in one direction only: phrase 1 vertically, phrase 2 horizontally (it is the same thing rotated 90°).
+2. The phrase is stretched about 24× in one direction only: phrase 1 vertically, phrase 2 horizontally (it is the same thing rotated 90°).
 3. The type size is chosen so the stretched bodies of the letters (the x-height) form the dense block. Ascenders and descenders hang out of it as loose threads.
 4. The two phrases are laid over each other, so the stems of one cross the stems of the other like warp and weft.
 
-Nothing else is distorted. Where a curved stroke turns horizontal (the tops and bottoms of n, o, e, a, s) the stretch makes it 17× thicker, while the upright stems stay thin. That is what produces the fat, tapered loops at the top and bottom of each letter. Lowercase matters: capitals are mostly straight stems and bars, which stretch into obvious rectangles.
+Nothing else is distorted. Where a curved stroke turns horizontal (the tops and bottoms of n, o, e, a, s) the stretch makes it 24× thicker, while the upright stems stay thin. That is what produces the fat, tapered loops at the top and bottom of each letter. Lowercase matters: capitals are mostly straight stems and bars, which stretch into obvious rectangles.
 
-At a grazing angle (about 3–7° above the screen), foreshortening squashes the stretched phrase back into normal letters. Strokes running the other way shrink to hairlines from that angle, so the other phrase barely gets in the way. Look from the charger end to read phrase 1, and from the left edge to read phrase 2.
+At a grazing angle (about 2–5° above the screen), foreshortening squashes the stretched phrase back into normal letters. Strokes running the other way shrink to hairlines from that angle, so the other phrase barely gets in the way. Look from the charger end to read phrase 1, and from the left edge to read phrase 2.
 
 The font is Roboto (variable weight), bundled in `fonts/` under the SIL Open Font License, so the letters look the same on every device.
 
