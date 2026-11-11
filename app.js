@@ -8,7 +8,8 @@
  *
  * Secret input (shown only in the faint corner indicator):
  *   – Pinch: each `pinchStep` change of finger distance steps the value.
- *   – Rotate: every quarter turn steps the suit (the image snaps to 90°).
+ *   – Rotate: every 22.5° of twist steps the suit, so all four go by in a
+ *     quarter turn. The picture can be left at any angle.
  *   – Double-tap: lock the card in. The lettering on screen is rewoven into
  *     two real phrases that fill the screen and stay part of the loom;
  *     pinching and turning now only move the picture.
@@ -70,6 +71,7 @@
     letterCase: 'upper',
     suitOrder: 'CHSD',
     pinchStep: 1.22,
+    suitStepDeg: 22.5,  // twist per suit: all four suits in a quarter turn
     gestureLock: true,
     liveUpdate: false,
     haptics: true,
@@ -138,7 +140,8 @@
 
   const state = {
     value: 0,          // 0..12
-    suitOffset: 0,     // suit index when theta's quadrant is 0
+    suitOffset: 0,     // suit index when suitTick is 0
+    suitTick: 0,       // how many suit steps the image has been turned (see trackSuit)
     theta: 0,          // image rotation (radians, relative to the device)
     s: 1,              // zoom
     pan: { x: 0, y: 0 },
@@ -160,11 +163,11 @@
 
   // ---------------------------------------------------------------- cards
   const suitKeys = () => S.suitOrder.split('');
-  const quadrant = (theta = state.theta) => Math.round(theta / Q);
+  const suitStep = () => (clamp(S.suitStepDeg, 5, 90) * Math.PI) / 180;
   function currentCard() {
     if (state.locked) return state.locked;
     const keys = suitKeys();
-    const suitKey = keys[mod(state.suitOffset + quadrant(), 4)];
+    const suitKey = keys[mod(state.suitOffset + state.suitTick, 4)];
     return { value: state.value, suitKey };
   }
   const cardKey = (c) => `${c.value}${c.suitKey}`;
@@ -231,7 +234,7 @@
     return sideways ? { width: H * 0.985, maxBand: W * body } : { width: W * 0.985, maxBand: H * body };
   }
 
-  const GAP = '    '; // between repeats of a phrase
+  const GAP = '  '; // between repeats of a phrase: two word spaces
   /**
    * A short phrase cannot reach the far end of a long side however far it is
    * letter-spaced, so it is repeated along the line until it does.
@@ -246,7 +249,7 @@
     const emMax = slot.maxBand / (St * m.xh);
     let n = 1, best = Infinity;
     for (let k = 1; k <= 8; k++) {
-      const spread = slot.width / ((k * m.nat + (k - 1)) * emMax); // >1: letter-spaced, <1: shrunk
+      const spread = slot.width / ((k * m.nat + (k - 1) * 0.5) * emMax); // >1: letter-spaced, <1: shrunk
       const cost = spread >= 1 ? Math.log(spread) : -2.5 * Math.log(spread);
       if (cost < best) { best = cost; n = k; }
     }
@@ -500,7 +503,7 @@
     return { x: MID + dx * cos - dy * sin, y: MID + dx * sin + dy * cos, k: 1 / state.s };
   }
 
-  function buildMessage(card, weave, q, frame) {
+  function buildMessage(card, weave, rot, frame) {
     const msgs = [
       { text: applyCase(S.phraseA, true), edge: S.edgeA },
       { text: applyCase(cardPhrase(card), false), edge: S.edgeB },
@@ -560,7 +563,8 @@
       glyphs.push({ lines: g.lines, extras: g.extras, box: g.box, font: g.font, em: g.em, xhU: g.xhU, ra: g.ra, St: g.St, ox: regions[i].c[0], oy: regions[i].c[1], U: e.U, R: e.R });
       return { textW: g.textW, bandLen: g.bandLen, lines: g.text, St: g.St, edge: m.edge };
     });
-    return { glyphs, q, frame: frame || { x: MID, y: MID, k: 1 }, key: cardKey(card), info, card };
+    // rot: the image rotation at which the message is upright on screen
+    return { glyphs, rot, frame: frame || { x: MID, y: MID, k: 1 }, key: cardKey(card), info, card };
   }
 
   // ---------------------------------------------------------------- scene
@@ -569,7 +573,7 @@
     const weave = newWeave || !scene ? buildWeave(state.seed) : scene.weave;
     // an existing message stays where it was woven; a new one goes mid-screen
     const frame = scene && scene.msg ? scene.msg.frame : currentFrame();
-    const msg = state.revealed ? buildMessage(currentCard(), weave, quadrant(), frame) : null;
+    const msg = state.revealed ? buildMessage(currentCard(), weave, scene && scene.msg ? scene.msg.rot : state.theta, frame) : null;
     setScene({ weave, msg }, fadeMs);
   }
   function setScene(next, fadeMs) {
@@ -589,14 +593,13 @@
     updateIndicator();
     if (!state.revealed) return;
     const card = currentCard();
-    const q = quadrant();
-    if (!scene.msg || cardKey(card) !== scene.msg.key) {
+    // Until it is locked the message follows the view: it is rewoven when the
+    // card changes or the picture has been turned, so it is always upright.
+    // Once locked it is part of the loom and turns with it.
+    const turned = scene.msg && Math.abs(wrapPi(scene.msg.rot - state.theta)) > 0.004;
+    if (!scene.msg || cardKey(card) !== scene.msg.key || (turned && !state.locked)) {
       const dur = fadeMs !== undefined ? fadeMs : (scene.msg ? 380 : 900);
-      setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, q, currentFrame()) }, dur);
-    } else if (scene.msg.q !== q) {
-      // Same card ⇒ same suit ⇒ q differs by whole turns: visually identical.
-      // (Once locked the message is part of the sheet and turns with it.)
-      if (!state.locked) scene.msg.q = q;
+      setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, state.theta, currentFrame()) }, dur);
     }
   }
 
@@ -634,7 +637,7 @@
     if (scene && (Math.abs((prevVis || 0) - view.visW) > 1 || Math.abs((prevVisH || 0) - view.visH) > 1)) {
       pageCache.clear();
       const old = scene.msg;
-      scene = { weave: scene.weave, msg: old ? buildMessage(currentCard(), scene.weave, old.q, old.frame) : null };
+      scene = { weave: scene.weave, msg: old ? buildMessage(currentCard(), scene.weave, old.rot, old.frame) : null };
       fade = null;
     }
     requestDraw();
@@ -642,7 +645,7 @@
 
   const msgTransform = (c, m) => {
     c.translate(m.frame.x, m.frame.y);
-    c.rotate(-m.q * Q);
+    c.rotate(-m.rot);
     c.scale(m.frame.k, m.frame.k);
     c.translate(-MID, -MID);
   };
@@ -650,18 +653,13 @@
   const glyphTransform = (c, g) => c.transform(g.R[0], g.R[1], -g.U[0] * g.St, -g.U[1] * g.St, g.ox, g.oy);
 
   /**
-   * Where the loom must keep clear of the message. A thread only gets in the
-   * way of the phrase that is stretched along it (tilted, it would look like
-   * a letter stem), so each layer is cleared from that phrase's box only and
-   * runs right up to the block everywhere else.
+   * Where the loom must keep clear of the message: under both phrases. The
+   * message can sit at any angle to the loom, so any loom lettering under it
+   * would strike through the words. (`dir` is the loom layer; unused now.)
    */
-  function clearZones(sc, dir) {
+  function clearZones(sc, dir) { // eslint-disable-line no-unused-vars
     const m = sc && sc.msg;
-    if (!m) return [];
-    const turned = mod(m.q, 2) === 1;
-    return m.glyphs
-      .filter((g) => ((Math.abs(g.U[1]) > 0.5) !== turned) === (dir === 0))
-      .map((g) => ({ m, g }));
+    return m ? m.glyphs.map((g) => ({ m, g })) : [];
   }
   /** Image coordinates → canvas pixels for view V. */
   function worldTransform(c, V) {
@@ -900,6 +898,7 @@
     state.s = lerp(anim.from.s, anim.to.s, e);
     state.pan.x = lerp(anim.from.px, anim.to.px, e);
     state.pan.y = lerp(anim.from.py, anim.to.py, e);
+    trackSuit();
     if (t >= 1) {
       const done = anim.done;
       anim = null;
@@ -920,7 +919,7 @@
   }
 
   function settle() {
-    const theta = quadrant() * Q;
+    const theta = state.theta; // the picture stays at whatever angle it was turned to
     const s = clamp(state.s, ZOOM_MIN, ZOOM_MAX);
     const lim = ROAM * view.fit * s;
     const px = clamp(state.pan.x, -lim, lim), py = clamp(state.pan.y, -lim, lim);
@@ -952,17 +951,22 @@
     if (S.liveUpdate) liveRebuild();
   }
 
-  let lastQuadrant = 0;
-  function trackQuadrant() {
-    const q = quadrant();
-    if (q !== lastQuadrant) {
-      lastQuadrant = q;
-      if (state.locked) return;
-      if (S.revealOn === 'input') state.revealed = true;
-      haptic();
-      updateIndicator();
-      if (S.liveUpdate) liveRebuild();
-    }
+  /**
+   * Turning the picture steps the suit: one suit every `suitStepDeg` degrees,
+   * so by default all four go by within a quarter turn. There is a little
+   * slack around each boundary so that a hand resting near one does not make
+   * the suit flicker.
+   */
+  function trackSuit() {
+    const step = suitStep();
+    let moved = 0;
+    while (state.theta - state.suitTick * step > step * 0.6) { state.suitTick++; moved++; }
+    while (state.theta - state.suitTick * step < -step * 0.6) { state.suitTick--; moved++; }
+    if (!moved || state.locked) return;
+    if (S.revealOn === 'input') state.revealed = true;
+    haptic();
+    updateIndicator();
+    if (S.liveUpdate) liveRebuild();
   }
 
   /**
@@ -974,16 +978,19 @@
     if (state.locked || !scene) return;
     state.locked = currentCard();
     state.revealed = true;
-    commit();
+    // straighten the loom to the nearest right angle, then weave the message in
+    const square = Math.round(state.theta / Q) * Q;
+    if (Math.abs(square - state.theta) > 0.004) animateTo({ theta: square }, 300, () => commit());
+    else commit();
     try { if (S.haptics && navigator.vibrate) navigator.vibrate([12, 60, 12]); else { lastHapticAt = 0; haptic(); } } catch (_) { /* ignore */ }
     updateIndicator();
   }
   /** Bring the woven message back to the middle of the screen, upright. */
   function recentre() {
-    const to = { s: 1, px: 0, py: 0, theta: quadrant() * Q };
+    const to = { s: 1, px: 0, py: 0, theta: state.theta };
     if (scene && scene.msg) {
       const m = scene.msg, f = m.frame;
-      to.theta = m.q * Q + Math.round((state.theta - m.q * Q) / (4 * Q)) * 4 * Q;
+      to.theta = m.rot + Math.round((state.theta - m.rot) / (4 * Q)) * 4 * Q;
       const a = to.theta - (screenAngle() * Math.PI) / 180;
       to.s = 1 / f.k;
       const kv = view.fit * to.s;
@@ -999,7 +1006,7 @@
     if (!scene || !scene.msg) return; // nothing woven yet: it appears on release
     const card = currentCard();
     if (cardKey(card) === scene.msg.key) return;
-    setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, scene.msg.q, scene.msg.frame) }, 140);
+    setScene({ weave: scene.weave, msg: buildMessage(card, scene.weave, scene.msg.rot, scene.msg.frame) }, 140);
   }
 
   function updateIndicator() {
@@ -1075,7 +1082,7 @@
     const lg = Math.log(d / G.d0);
 
     if (S.gestureLock && !G.lock) {
-      if (Math.abs(G.dAng) > (15 * Math.PI) / 180) { G.lock = 'rotate'; G.lgFrozen = lg; }
+      if (Math.abs(G.dAng) > Math.min((7 * Math.PI) / 180, suitStep() * 0.4)) { G.lock = 'rotate'; G.lgFrozen = lg; }
       else if (Math.abs(lg) > Math.log(1.1)) { G.lock = 'pinch'; G.angFrozen = G.dAng; }
     }
     let effLog = lg, effAng = G.dAng;
@@ -1099,7 +1106,7 @@
     const cos = Math.cos(rot), sin = Math.sin(rot);
     state.pan.x = c.x - (vx * cos - vy * sin) - view.cx;
     state.pan.y = c.y - (vx * sin + vy * cos) - view.cy;
-    trackQuadrant();
+    trackSuit();
     requestDraw();
   }
 
@@ -1130,7 +1137,7 @@
       if (now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
         lastTap.t = 0;
         // first double-tap locks the revelation in; after that it recentres
-        if (!state.locked) { lockIn(); settle(); } else recentre();
+        if (!state.locked) lockIn(); else recentre();
         return;
       }
       lastTap = { t: now, x: e.clientX, y: e.clientY };
@@ -1164,7 +1171,7 @@
     if (e.shiftKey || e.altKey) {
       wheelG.ang += delta * 0.004;
       state.theta = wheelG.th0 + wheelG.ang;
-      trackQuadrant();
+      trackSuit();
     } else {
       const dl = -delta * 0.0022;
       wheelG.lg += dl;
@@ -1185,10 +1192,8 @@
       case 'ArrowDown': stepValue(-1); commit(); break;
       case 'ArrowRight':
       case 'ArrowLeft': {
-        const target = (quadrant() + (e.key === 'ArrowRight' ? 1 : -1)) * Q;
-        animateTo({ theta: target }, 260, () => commit());
-        // count the suit change at once
-        const saved = state.theta; state.theta = target; trackQuadrant(); state.theta = saved;
+        const target = (state.suitTick + (e.key === 'ArrowRight' ? 1 : -1)) * suitStep();
+        animateTo({ theta: target }, 200, () => commit());
         break;
       }
       case 'r': case 'R': reweave(); break;
@@ -1206,7 +1211,7 @@
       const card = state.locked;
       state.locked = null;
       state.value = card.value;
-      state.suitOffset = mod(S.suitOrder.indexOf(card.suitKey) - quadrant(), 4);
+      state.suitOffset = mod(S.suitOrder.indexOf(card.suitKey) - state.suitTick, 4);
     }
     state.revealed = S.revealOn === 'start'; // back to a bare loom
     rebuild({ fadeMs: 650 });
@@ -1246,6 +1251,7 @@
     form.elements.ascenderOut.value = `${Math.round(S.ascender * 100)}%`;
     form.elements.weightOut.value = `${Math.round(S.weight)}`;
     form.elements.pinchStepOut.value = `${Math.round((S.pinchStep - 1) * 100)}%`;
+    form.elements.suitStepDegOut.value = `${(+S.suitStepDeg).toFixed(1)}°`;
   }
   function readForm() {
     const next = { ...S };
@@ -1269,13 +1275,13 @@
     // keep the same card when the suit order changes
     if (before.suitOrder !== S.suitOrder) {
       const c = cardWith(before.suitOrder);
-      state.suitOffset = mod(S.suitOrder.indexOf(c) - quadrant(), 4);
+      state.suitOffset = mod(S.suitOrder.indexOf(c) - state.suitTick, 4);
     }
     if (S.revealOn === 'start') state.revealed = true;
     clearTimeout(formTimer);
     formTimer = setTimeout(() => { rebuild({ newWeave: true }); updateIndicator(); drawPreviews(); }, 60);
   });
-  function cardWith(order) { return order[mod(state.suitOffset + quadrant(), 4)]; }
+  function cardWith(order) { return order[mod(state.suitOffset + state.suitTick, 4)]; }
 
   document.getElementById('reset-defaults').addEventListener('click', () => {
     S = { ...DEFAULTS };
@@ -1312,7 +1318,7 @@
     if (!scene) return;
     // Before a card is input nothing is woven in; preview what would be.
     const sc = scene.msg ? scene
-      : { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, quadrant(), currentFrame()) };
+      : { weave: scene.weave, msg: buildMessage(currentCard(), scene.weave, state.theta, currentFrame()) };
     const m = sc.msg;
     const info = (m.info || []).find((i) => i && i.edge === edge);
     const St = info ? info.St : S.stretch;
@@ -1336,7 +1342,7 @@
     const k = size / span;
     drawScene(c, sc, 1, {
       w: size, h: size, cx: size / 2, cy: size / 2,
-      rot: EDGES[edge].toBottom + m.q * Q,
+      rot: EDGES[edge].toBottom + m.rot,
       zoom: 1 / m.frame.k, px: k,
       camX: m.frame.x, camY: m.frame.y,
     });
@@ -1395,7 +1401,7 @@
     settings: () => ({ ...S }),
     setCard(value, suitKey) {
       state.value = mod(value, 13);
-      state.suitOffset = mod(S.suitOrder.indexOf(suitKey) - quadrant(), 4);
+      state.suitOffset = mod(S.suitOrder.indexOf(suitKey) - state.suitTick, 4);
       state.revealed = true;
       commit(0);
     },

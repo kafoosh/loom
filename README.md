@@ -10,10 +10,10 @@ The page opens as an endless loom of threads with nothing hidden in it. You secr
 2. A card is chosen.
 3. Take the phone back and play with the image while you talk:
    - **Pinch out / in**: value up / down (A → 2 → … → K → A, wraps around)
-   - **Twist a quarter turn** clockwise / anticlockwise: next / previous suit (wraps around)
+   - **Twist** clockwise / anticlockwise: next / previous suit every 22.5°, so all four go by within a quarter turn (wraps around). You can stop at any angle; the picture stays where you leave it.
 
    Each step gives a haptic tick, and the faint indicator in the bottom-right corner shows the current card (e.g. `7♥`).
-4. **Double-tap** to lock the card in. The message fades in at the centre of the screen, upright and sized to fit, and the indicator gets a thin underline. From now on pinching and twisting only move the picture; the card cannot change.
+4. **Double-tap** to lock the card in. The loom straightens to the nearest right angle, the message fades in upright and sized to fit the screen, and the indicator gets a thin underline. From now on pinching and twisting only move the picture; the card cannot change.
 5. Tilt from the bottom edge: **THE CARD YOU CHOSE WAS**. Turn the phone and tilt from the left edge: **THE SEVEN OF HEARTS**.
 
 Other controls: drag with one finger to pan. Once locked, double-tap again brings the message back to the centre of the screen. **Reweave** makes a new loom, clears the message and unlocks, ready for the next performance. The indicator keeps the last card, so you can count from it.
@@ -23,7 +23,7 @@ Other controls: drag with one finger to pan. Once locked, double-tap again bring
 **Long-press the `loom` wordmark** in the top-left corner (or open `…/#setup`, or press <kbd>S</kbd> on a computer) for:
 
 - both phrases, and which edge each is read from (`{value}`, `{suit}`, and `|` for a line break)
-- suit order (CHaSeD or SHoCkeD), pinch sensitivity, gesture lock, haptics
+- suit order (CHaSeD or SHoCkeD), pinch sensitivity, how far to twist per suit, gesture lock, haptics
 - indicator style: `7♥`, a code (`no. 07·2`), dots, or off
 - stretch, letter case (capitals by default, so every letter is the same height), letter thickness, layout, and theme
 - for lowercase: how tall the tall parts of letters are, and how many loose threads
